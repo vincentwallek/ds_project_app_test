@@ -3,22 +3,30 @@ import base64
 import pandas as pd
 import numpy as np
 
+
+def _fmt_h(s):
+    """Capitalize for display in recommendation text."""
+    if not s:
+        return s
+    parts = s.split("-")
+    return "-".join(p.upper() if (p.isalpha() and len(p) <= 3) else p.capitalize() for p in parts)
+
 # ── Feature label mappings ─────────────────────────────────────────
 DE_BINARY_LABELS = {
-    "tuv_neu": "TUV New",
-    "scheckheft_gepflegt": "Service Book",
-    "bereifung_8_fach": "8-Tire Set",
-    "bereifung_allwetter": "All-Weather Tires",
-    "unfallfrei": "Accident-Free",
-    "mangel_vorhanden": "Defects Present",
+    "tuv_neu": "TUEV neu",
+    "scheckheft_gepflegt": "Scheckheft gepflegt",
+    "bereifung_8_fach": "8-fach Bereifung",
+    "bereifung_allwetter": "Allwetterreifen",
+    "unfallfrei": "Unfallfrei",
+    "mangel_vorhanden": "Maengel vorhanden",
     "ausstattung_distronic": "Distronic",
     "ausstattung_multibeam": "Multibeam LED",
-    "ausstattung_klima_4_zonen": "4-Zone Climate",
-    "ausstattung_klima_2_zonen": "2-Zone Climate",
+    "ausstattung_klima_4_zonen": "4-Zonen Klima",
+    "ausstattung_klima_2_zonen": "2-Zonen Klima",
     "ausstattung_burmester_3d": "Burmester 3D",
     "ausstattung_burmester_standard": "Burmester Standard",
     "ausstattung_amg_line": "AMG Line",
-    "ausstattung_pano": "Panoramic Roof",
+    "ausstattung_pano": "Panoramadach",
 }
 
 DE_CONDITION_KEYS = ["tuv_neu", "unfallfrei", "mangel_vorhanden", "scheckheft_gepflegt"]
@@ -71,14 +79,16 @@ def predict_price_fast(trained_models, market, input_data):
     return float(model.predict(X)[0])
 
 
-def generate_recommendations(trained_models, market, input_data, base_price, db_data, currency_symbol):
-    """Generate savings/upgrade recommendations by toggling features."""
+def generate_recommendations(trained_models, market, input_data, base_price, db_data, currency_symbol, role="buyer"):
+    """Generate role-aware recommendations.
+    Buyer: only show options that reduce the price (savings).
+    Seller: only show options that increase the price (upgrades).
+    """
     recs = []
     if not trained_models:
         return recs
 
     if market == "DE":
-        # Toggle each binary feature
         all_binary = DE_CONDITION_KEYS + DE_EQUIP_KEYS
         for key in all_binary:
             if key not in input_data:
@@ -86,22 +96,26 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
             alt = dict(input_data)
             current_val = alt[key]
             alt[key] = 0.0 if current_val == 1.0 else 1.0
-            alt_price = predict_price_fast(trained_models, market, alt)
-            diff = base_price - alt_price
+            try:
+                alt_price = predict_price_fast(trained_models, market, alt)
+            except:
+                continue
             label = DE_BINARY_LABELS.get(key, key)
-            if current_val == 1.0 and diff > 100:
+
+            if role == "buyer" and current_val == 1.0 and base_price > alt_price + 100:
+                saving = base_price - alt_price
                 recs.append({
-                    "text": f"Without '{label}' the value drops by ~{abs(diff):,.0f} {currency_symbol}.",
-                    "saving": diff, "type": "value_driver"
+                    "text": f"Wenn du auf '{label}' verzichtest, sparst du ca. {saving:,.0f} {currency_symbol}.",
+                    "saving": saving, "type": "saving"
                 })
-            elif current_val == 0.0 and alt_price > base_price + 100:
+            elif role == "seller" and current_val == 0.0 and alt_price > base_price + 100:
                 gain = alt_price - base_price
                 recs.append({
-                    "text": f"Adding '{label}' could increase value by ~{gain:,.0f} {currency_symbol}.",
+                    "text": f"Wenn du '{label}' anbietest, nimmt der Preis um ca. {gain:,.0f} {currency_symbol} zu.",
                     "saving": gain, "type": "upgrade"
                 })
 
-        # Try alternative models from same brand
+        # Alternative models from same brand
         if not db_data.empty:
             brand = input_data.get("brand", "")
             current_model = input_data.get("model", "")
@@ -113,16 +127,15 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                 try:
                     alt_price = predict_price_fast(trained_models, market, alt)
                     diff = base_price - alt_price
-                    if diff > 500:
+                    if role == "buyer" and diff > 500:
                         recs.append({
-                            "text": f"A '{alt_m}' with the same specs would cost ~{diff:,.0f} {currency_symbol} less.",
+                            "text": f"Ein '{_fmt_h(alt_m)}' mit gleicher Ausstattung wuerde ca. {diff:,.0f} {currency_symbol} weniger kosten.",
                             "saving": diff, "type": "alternative"
                         })
                 except:
                     pass
 
     else:  # US
-        # Try alternative models
         if not db_data.empty:
             brand = input_data.get("brand", "")
             current_model = input_data.get("model", "")
@@ -134,28 +147,35 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                 try:
                     alt_price = predict_price_fast(trained_models, market, alt)
                     diff = base_price - alt_price
-                    if diff > 500:
+                    if role == "buyer" and diff > 500:
                         recs.append({
-                            "text": f"A '{alt_m}' with the same specs would cost ~${diff:,.0f} less.",
+                            "text": f"Ein '{_fmt_h(alt_m)}' mit gleicher Ausstattung wuerde ca. ${diff:,.0f} weniger kosten.",
                             "saving": diff, "type": "alternative"
                         })
                 except:
                     pass
 
-        # Try fewer cylinders
+        # Cylinder alternatives
         if input_data.get("cylinders", 0) > 4:
             alt = dict(input_data)
             alt["cylinders"] = max(4.0, alt["cylinders"] - 2.0)
             try:
                 alt_price = predict_price_fast(trained_models, market, alt)
                 diff = base_price - alt_price
-                if diff > 300:
+                if role == "buyer" and diff > 300:
                     recs.append({
-                        "text": f"A {int(alt['cylinders'])}-cylinder engine would save ~${diff:,.0f}.",
-                        "saving": diff, "type": "downgrade"
+                        "text": f"Ein {int(alt['cylinders'])}-Zylinder-Motor wuerde ca. ${diff:,.0f} sparen.",
+                        "saving": diff, "type": "saving"
+                    })
+                elif role == "seller" and alt_price > base_price + 300:
+                    gain = alt_price - base_price
+                    recs.append({
+                        "text": f"Mit einem {int(input_data['cylinders'] + 2)}-Zylinder-Motor koennte der Preis um ca. ${gain:,.0f} steigen.",
+                        "saving": gain, "type": "upgrade"
                     })
             except:
                 pass
 
     recs.sort(key=lambda r: r["saving"], reverse=True)
     return recs[:5]
+
