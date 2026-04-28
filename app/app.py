@@ -943,7 +943,23 @@ def view_app():
     with tab_chat:
         if "GROQ_API_KEY" in st.secrets:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-            sys_prompt = {"role": "system", "content": f"Du bist der AutoValue Experte für den {market} Automarkt. Antworte professionell und auf Deutsch."}
+            
+            # System Persona für Llama 3 - Strenges Grounding auf die App
+            fahrzeug_kontext = f"{brand.title()} {model_name.upper()} ({variant}) mit {mileage} km und {age} Jahren."
+            
+            strikter_text = (
+                f"Du bist der exklusive AutoValue KI-Assistent für den {market} Markt.\n"
+                f"Der Nutzer betrachtet gerade dieses Fahrzeug in der App: {fahrzeug_kontext}\n\n"
+                f"STRIKTE REGELN FÜR DEINE ANTWORTEN:\n"
+                f"1. Beziehe dich bei Erklärungen auf das aktuell betrachtete Fahrzeug.\n"
+                f"2. Nenne NIEMALS externe Quellen (VERBOTEN: Kelley Blue Book, KBB, Schwacke, Mobile.de, Edmunds etc.).\n"
+                f"3. Erfinde keine eigenen Preise oder exakten Prozentwerte für Wertverluste aus deinem Trainingsdaten-Wissen.\n"
+                f"4. Wenn der Nutzer nach genauen Preisen fragt, weise ihn darauf hin, dass AutoValue ein hochpräzises Machine-Learning Modell (XGBoost) nutzt und er für den exakten Preis einfach den Button 'Analyse starten' im 'Analysis Engine' Tab klicken soll.\n"
+                f"5. Erkläre stattdessen abstrakt, wie Machine Learning Faktoren wie Kilometerstand, Alter und Motorisierung (SHAP-Werte) gewichtet.\n"
+                f"6. Antworte immer professionell, seriös und auf Deutsch."
+            )
+            
+            sys_prompt = {"role": "system", "content": strikter_text}
 
             for m in st.session_state.chat_history:
                 with st.chat_message(m["role"]): st.markdown(m["content"])
