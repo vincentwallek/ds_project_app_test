@@ -578,15 +578,13 @@ def run_ml_prediction(market, brand, model_name, car_age, mileage, transmission=
     if s_vals is None:
         return json.dumps({"error": "Modell konnte nicht geladen werden."})
         
-    # Die wichtigsten SHAP-Werte extrahieren
-    impacts = list(zip(s_vals[0].feature_names, s_vals[0].values))
-    top_impacts = sorted(impacts, key=lambda x: abs(x[1]), reverse=True)[:5]
-    impact_dict = {feat: round(float(val), 2) for feat, val in top_impacts}
+    # Wir geben ALLE Faktoren an die KI, damit sie gezielt filtern kann
+    impact_dict = {feat: round(float(val), 2) for feat, val in zip(s_vals[0].feature_names, s_vals[0].values)}
     
     result = {
         "berechneter_preis": round(float(price), 2),
         "waehrung": "€" if market == "DE" else "$",
-        "wichtigste_preistreiber": impact_dict
+        "alle_preis_einflussfaktoren": impact_dict
     }
     return json.dumps(result)
 
@@ -983,11 +981,12 @@ def view_app():
             verfuegbare_marken = ", ".join(sorted(db_data['brand'].dropna().unique())) if not db_data.empty else "unserer Datenbank"
             
             system_anweisung = (
-                f"Du bist der exklusive KI-Assistent von AutoValue für den {market}-Automarkt. Du berätst einen {rolle_text}.\n"
-                f"WICHTIG: Wenn der Nutzer nach dem Wert eines Fahrzeugs fragt oder wissen will, wie viel ein Fahrzeug verliert, MUSST du dein Tool 'run_ml_prediction' aufrufen, um den Preis und die Preis-Einflussfaktoren (SHAP) zu berechnen!\n"
-                f"Rate niemals Preise und nutze niemals externe Quellen (wie KBB oder Schwacke).\n"
-                f"Wenn du das Tool genutzt hast, präsentiere dem Nutzer die Ergebnisse (Preis und Preistreiber) übersichtlich auf Deutsch.\n"
-                f"Kaufempfehlungen darfst du nur für diese Marken aussprechen: {verfuegbare_marken}."
+                f"Du bist der exklusive KI-Assistent von AutoValue für den {market}-Automarkt. Du berätst einen {rolle_text}.\n\n"
+                f"WICHTIGSTE REGELN:\n"
+                f"1. WERTVERLUST & PREISE: Nutze das Tool 'run_ml_prediction', um Preise zu berechnen. Wenn der Nutzer nach einem SPEZIFISCHEN Faktor fragt (z.B. 'Wertverlust nach 5 Jahren'), suche in den zurückgegebenen Einflussfaktoren GEZIELT nach 'car_age' (Fahrzeugalter) und nenne NUR diesen Wert! Lies nicht blind alle Preistreiber vor, wenn nicht danach gefragt wurde.\n"
+                f"2. BUDGET & KÄUFER-EMPFEHLUNGEN: Wenn der Nutzer ein Budget nennt (z.B. 'Auto bis 30.000€'), NUTZE DAS TOOL NICHT! Du hast keine Datenbank-Suchfunktion. Nenne allgemeine, passende Modelle dieser verfügbaren Marken ({verfuegbare_marken}), aber erfinde keine Schätzpreise. Verweise den Nutzer immer darauf, den Bereich 'Buyer Intelligence' (Inventar suchen) links im Dashboard zu nutzen, um aktuelle Angebote im Budget zu finden.\n"
+                f"3. Keine externen Quellen (KBB etc.) nutzen.\n"
+                f"4. Antworte auf Deutsch, präzise und direkt auf die gestellte Frage."
             )
             
             sys_prompt = {"role": "system", "content": system_anweisung}
