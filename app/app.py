@@ -653,13 +653,96 @@ def _render_shap_display(s_vals, csym, input_vals):
     impacts = sorted(impacts, key=lambda x: abs(x[1]), reverse=True)[:10]
 
     st.caption(f"Basiswert (Durchschnitt): {csym}{base:,.0f}")
+    
+    # US Binary Mappings
+    US_BINARY_LABELS = {
+        "has_accidents": "Unfälle",
+        "one_owner": "Erster Hand",
+        "is_online": "Online-Kauf",
+        "is_used": "Gebrauchtwagen",
+        "is_cpo": "CPO-Fahrzeug",
+        "is_wholesale": "Wholesale-Angebot",
+        "personal_use": "Private Nutzung",
+    }
+    
+    # Grammatical gender mapping for "Kein" vs "Keine"
+    GENDER_MAP = {
+        "Motor": "Kein",
+        "Karosserie": "Keine",
+        "Außenfarbe": "Keine",
+        "Innenfarbe": "Keine",
+        "Marke": "Keine",
+        "Kraftstoff": "Kein",
+        "Antrieb": "Kein",
+        "Getriebe": "Kein",
+        "Ausstattungslinie": "Keine",
+        "Modell": "Kein",
+        "Nutzungsart": "Keine",
+    }
+
     for feat, val in impacts:
+        label = ""
+        
         if feat in DE_BINARY_LABELS:
             is_active = input_vals.get(feat, 0.0) == 1.0
             prefix = "Mit" if is_active else "Ohne"
             label = f"{prefix} {DE_BINARY_LABELS[feat]}"
+            
+        elif feat in US_BINARY_LABELS:
+            is_active = input_vals.get(feat, 0.0) == 1.0
+            if feat == "has_accidents":
+                label = "Mit Unfällen" if is_active else "Unfallfrei"
+            elif feat == "one_owner":
+                label = "Aus 1. Hand" if is_active else "Mehrere Vorbesitzer"
+            else:
+                prefix = "Mit" if is_active else "Ohne"
+                label = f"{prefix} {US_BINARY_LABELS[feat]}"
+                
         else:
-            label = _translate_shap(feat)
+            is_prefix_feat = False
+            for p_key, p_label in _SHAP_PREFIX.items():
+                if feat.startswith(p_key):
+                    is_prefix_feat = True
+                    actual_value = feat[len(p_key):]
+                    input_key = p_key[:-1]
+                    user_value = input_vals.get(input_key, "")
+                    
+                    is_active = (str(user_value).lower() == str(actual_value).lower())
+                    gender = GENDER_MAP.get(p_label, "Kein")
+                    
+                    if is_active:
+                        label = f"{p_label}: {_fmt(actual_value)}"
+                    else:
+                        label = f"{gender} {p_label}: {_fmt(actual_value)}"
+                    break
+                    
+            if not is_prefix_feat:
+                if feat in input_vals:
+                    v = input_vals[feat]
+                    base_label = _translate_shap(feat)
+                    if feat == "mileage":
+                        unit = "km" if csym == "€" else "Meilen"
+                        label = f"{base_label} von {v:,.0f} {unit}"
+                    elif feat == "car_age":
+                        label = f"{base_label} von {int(v)} Jahren"
+                    elif feat == "power_ps":
+                        label = f"{base_label} von {int(v)} PS"
+                    elif feat in ["owners", "owner_count"]:
+                        label = f"{int(v)} Vorbesitzer"
+                    elif feat == "accident_count":
+                        label = f"{int(v)} gemeldete Unfälle"
+                    elif feat == "cylinders":
+                        label = f"{int(v)}-Zylinder-Motor"
+                    elif feat == "doors":
+                        label = f"{int(v)} Türen"
+                    elif feat == "seats":
+                        label = f"{int(v)} Sitze"
+                    elif feat == "garantie_monate":
+                        label = f"{int(v)} Monate Garantie"
+                    else:
+                        label = f"{base_label}: {v}"
+                else:
+                    label = _translate_shap(feat)
             
         direction = "\u2191" if val > 0 else "\u2193"
         color = "#22c55e" if val > 0 else "#ef4444"
@@ -980,13 +1063,32 @@ def view_app():
             rolle_text = "Verkäufer" if role == "seller" else "Käufer"
             verfuegbare_marken = ", ".join(sorted(db_data['brand'].dropna().unique())) if not db_data.empty else "unserer Datenbank"
             
+            # 1. Basis-Anweisung & Erklärungs-Kontext für das Modell
             system_anweisung = (
                 f"Du bist der exklusive KI-Assistent von AutoValue für den {market}-Automarkt. Du berätst einen {rolle_text}.\n\n"
-                f"WICHTIGSTE REGELN:\n"
-                f"1. WERTVERLUST RICHTIG BERECHNEN: Wenn der Nutzer nach dem 'Wertverlust' über bestimmte Jahre fragt (z.B. nach 5 Jahren), MUSST du das Tool 'run_ml_prediction' ZWEIMAL aufrufen! Einmal für einen Neuwagen (car_age=0, mileage=0) und ein zweites Mal für das gefragte Alter (z.B. car_age=5, mileage=75000). Bilde dann die Differenz aus den beiden Werten 'berechneter_preis' und nenne dem Nutzer diesen echten Wertverlust. Nutze dafür NICHT die SHAP-Einflussfaktoren.\n"
-                f"2. PREIS-FAKTOREN ERKLÄREN: Nur wenn der Nutzer fragt 'Was drückt den Preis nach unten?' oder explizit nach bestimmten Ausstattungen fragt, schaust du in die 'alle_preis_einflussfaktoren' und nennst die passenden SHAP-Werte.\n"
-                f"3. BUDGET & KÄUFER-EMPFEHLUNGEN: Wenn der Nutzer ein Budget nennt (z.B. 'Auto bis 30.000€'), NUTZE DAS TOOL NICHT! Nenne allgemeine Modelle dieser Marken ({verfuegbare_marken}) und verweise auf die 'Buyer Intelligence' Suche links im Dashboard, um aktuelle Angebote im Budget zu finden.\n"
-                f"4. Keine externen Quellen (KBB etc.) nutzen. Antworte auf Deutsch, präzise und professionell."
+                f"TRANSPARENZ & METHODIK (Wie du rechnest):\n"
+                f"Erkläre dem Nutzer bei Preisberechnungen gerne kurz, wie du auf die Werte kommst: Du nutzt ein fortschrittliches Machine-Learning-Modell (XGBoost), das auf tausenden echten Marktdaten trainiert wurde. Um Preiseinflüsse exakt zu beziffern, wertest du sogenannte SHAP-Werte aus.\n\n"
+                f"ALLGEMEINE REGELN:\n"
+                f"1. WERTVERLUST: Wenn nach dem 'Wertverlust' über x Jahre gefragt wird, rufe das Tool 'run_ml_prediction' ZWEIMAL auf (Neuwagen vs. gefragtes Alter/KM) und bilde die Differenz aus den berechneten Preisen.\n"
+                f"2. PREIS-FAKTOREN: Nutze die 'alle_preis_einflussfaktoren' aus dem Tool, um exakt zu begründen, warum ein Auto diesen Preis hat (z.B. positiver/negativer Einfluss von Motor oder Alter).\n"
+                f"3. KEINE EXTERNEN QUELLEN: Nutze niemals KBB, Schwacke etc. Verlasse dich nur auf dein Tool.\n"
+            )
+
+            # 2. Spezifische Einschränkungen je nach Rolle
+            if role == "buyer":
+                system_anweisung += (
+                    f"4. EINSCHRÄNKUNG FÜR KÄUFER: Weise den Nutzer freundlich darauf hin, dass du KEINE allgemeinen Fahrzeuginformationen, allgemeinen Kaufberatungen oder pauschale Budget-Empfehlungen (z.B. 'Welches Auto für 30.000€?') geben kannst. Deine Aufgabe ist AUSSCHLIESSLICH die datenbasierte Preisermittlung. Der Nutzer muss dir zwingend konkrete Daten (Marke, Modell, Alter, Kilometerstand) nennen, damit du das ML-Modell aufrufen kannst.\n"
+                )
+            else:
+                system_anweisung += (
+                    f"4. FOKUS FÜR VERKÄUFER: Hilf dem Nutzer, den optimalen Marktwert für sein spezifisches Fahrzeug zu ermitteln und zeige ihm auf, welche Ausstattungen den Preis treiben oder mindern.\n"
+                )
+
+            # 3. Zwingender Disclaimer
+            system_anweisung += (
+                f"\n5. HAFTUNGSAUSSCHLUSS: Beende JEDE deiner Antworten zwingend mit folgendem Satz in kursiver Schrift: "
+                f"'*Hinweis: Diese Angaben sind ohne Gewähr und wurden von einer Künstlichen Intelligenz auf Basis eines Machine-Learning-Modells ermittelt.*'\n"
+                f"Antworte auf Deutsch, präzise und professionell."
             )
             
             sys_prompt = {"role": "system", "content": system_anweisung}
@@ -1016,11 +1118,11 @@ def view_app():
                 with st.chat_message(m["role"], avatar=avatar_icon): 
                     st.markdown(m["content"])
 
-            if p := st.chat_input("Fragen zu Fahrzeugen, Werterhalt oder Budget?"):
+            if p := st.chat_input("Konkrete Fahrzeuge bewerten (Marke, Modell, Alter, KM) ..."):
                 with st.chat_message("user", avatar="👤"): st.markdown(p)
                 st.session_state[chat_key].append({"role": "user", "content": p})
 
-                with st.spinner("AutoValue Assistent denkt nach..."):
+                with st.spinner("AutoValue Assistent analysiert Daten..."):
                     try:
                         history_for_api = [{"role": msg["role"], "content": msg["content"]} for msg in st.session_state[chat_key][:-1]]
                         messages = [sys_prompt] + history_for_api + [{"role": "user", "content": p}]
@@ -1035,20 +1137,15 @@ def view_app():
                         
                         response_msg = response.choices[0].message
                         
-                        # 2. Prüfen, ob Groq das Tool aufgerufen hat (kann jetzt auch 2x aufgerufen werden!)
+                        # 2. Prüfen, ob Groq das Tool aufgerufen hat
                         if response_msg.tool_calls:
-                            # Wir hängen die Tool-Entscheidungen an die Historie an
                             messages.append(response_msg)
                             
-                            # Arbeitet alle Tool-Aufrufe ab (z.B. Neuwagen UND Gebrauchtwagen)
                             for tool_call in response_msg.tool_calls:
                                 if tool_call.function.name == "run_ml_prediction":
-                                    # Argumente von Groq auslesen
                                     args = json.loads(tool_call.function.arguments)
-                                    # Unsere Python-Funktion ausführen!
                                     tool_result = run_ml_prediction(**args)
                                     
-                                    # Ergebnis an Groq zurücksenden
                                     messages.append({
                                         "tool_call_id": tool_call.id,
                                         "role": "tool",
@@ -1056,14 +1153,13 @@ def view_app():
                                         "content": tool_result
                                     })
                             
-                            # 3. Zweiter Aufruf: Groq formuliert die finale Textantwort aus beiden Ergebnissen
+                            # 3. Zweiter Aufruf für finale Textantwort
                             final_response = client.chat.completions.create(
                                 model="llama-3.3-70b-versatile",
                                 messages=messages
                             )
                             final_text = final_response.choices[0].message.content
                         else:
-                            # Groq hat normal geantwortet (ohne Tool)
                             final_text = response_msg.content
 
                         with st.chat_message("assistant", avatar="🤖"): st.markdown(final_text)
