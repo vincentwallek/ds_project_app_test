@@ -1133,24 +1133,25 @@ def view_app():
                 f"TRANSPARENZ & METHODIK (Wie du rechnest):\n"
                 f"Erkläre dem Nutzer bei Preisberechnungen gerne kurz, wie du auf die Werte kommst: Du nutzt ein fortschrittliches Machine-Learning-Modell (XGBoost), das auf tausenden echten Marktdaten trainiert wurde. Um Preiseinflüsse exakt zu beziffern, wertest du sogenannte SHAP-Werte aus.\n\n"
                 f"ALLGEMEINE REGELN:\n"
-                f"1. WERTVERLUST: Wenn nach dem 'Wertverlust' über x Jahre gefragt wird, rufe das Tool 'run_ml_prediction' ZWEIMAL auf (Neuwagen vs. gefragtes Alter/KM) und bilde die Differenz aus den berechneten Preisen.\n"
-                f"2. PREIS-FAKTOREN: Nutze die 'alle_preis_einflussfaktoren' aus dem Tool, um exakt zu begründen, warum ein Auto diesen Preis hat (z.B. positiver/negativer Einfluss von Motor oder Alter).\n"
-                f"3. KEINE EXTERNEN QUELLEN: Nutze niemals KBB, Schwacke etc. Verlasse dich nur auf dein Tool.\n"
+                f"1. FEHLENDE DATEN (WICHTIG!): Das Tool 'run_ml_prediction' benötigt ZWINGEND Marke, Modell, Alter und Kilometerstand. Wenn der Nutzer einen dieser Werte vergisst (z.B. das Alter nicht nennt), ERFINDE NIEMALS WERTE! Rufe das Tool in diesem Fall NICHT auf, sondern frage den Nutzer freundlich nach der fehlenden Information (z.B. 'Wie alt ist das Fahrzeug?').\n"
+                f"2. WERTVERLUST: Wenn nach dem 'Wertverlust' über x Jahre gefragt wird, rufe das Tool 'run_ml_prediction' ZWEIMAL auf (Neuwagen vs. gefragtes Alter/KM) und bilde die Differenz aus den berechneten Preisen.\n"
+                f"3. PREIS-FAKTOREN: Nutze die 'alle_preis_einflussfaktoren' aus dem Tool, um exakt zu begründen, warum ein Auto diesen Preis hat.\n"
+                f"4. KEINE EXTERNEN QUELLEN: Nutze niemals KBB, Schwacke etc. Verlasse dich nur auf dein Tool.\n"
             )
 
             # 2. Spezifische Einschränkungen je nach Rolle
             if role == "buyer":
                 system_anweisung += (
-                    f"4. EINSCHRÄNKUNG FÜR KÄUFER: Weise den Nutzer freundlich darauf hin, dass du KEINE allgemeinen Fahrzeuginformationen, allgemeinen Kaufberatungen oder pauschale Budget-Empfehlungen (z.B. 'Welches Auto für 30.000€?') geben kannst. Deine Aufgabe ist AUSSCHLIESSLICH die datenbasierte Preisermittlung. Der Nutzer muss dir zwingend konkrete Daten (Marke, Modell, Alter, Kilometerstand) nennen, damit du das ML-Modell aufrufen kannst.\n"
+                    f"5. EINSCHRÄNKUNG FÜR KÄUFER: Weise den Nutzer freundlich darauf hin, dass du KEINE allgemeinen Fahrzeuginformationen, allgemeinen Kaufberatungen oder pauschale Budget-Empfehlungen (z.B. 'Welches Auto für 30.000€?') geben kannst. Deine Aufgabe ist AUSSCHLIESSLICH die datenbasierte Preisermittlung. Der Nutzer muss dir zwingend konkrete Daten (Marke, Modell, Alter, Kilometerstand) nennen, damit du das ML-Modell aufrufen kannst.\n"
                 )
             else:
                 system_anweisung += (
-                    f"4. FOKUS FÜR VERKÄUFER: Hilf dem Nutzer, den optimalen Marktwert für sein spezifisches Fahrzeug zu ermitteln und zeige ihm auf, welche Ausstattungen den Preis treiben oder mindern.\n"
+                    f"5. FOKUS FÜR VERKÄUFER: Hilf dem Nutzer, den optimalen Marktwert für sein spezifisches Fahrzeug zu ermitteln und zeige ihm auf, welche Ausstattungen den Preis treiben oder mindern.\n"
                 )
 
             # 3. Zwingender Disclaimer
             system_anweisung += (
-                f"\n5. HAFTUNGSAUSSCHLUSS: Beende JEDE deiner Antworten zwingend mit folgendem Satz in kursiver Schrift: "
+                f"\n6. HAFTUNGSAUSSCHLUSS: Beende JEDE deiner Antworten zwingend mit folgendem Satz in kursiver Schrift: "
                 f"'*Hinweis: Diese Angaben sind ohne Gewähr und wurden von einer Künstlichen Intelligenz auf Basis eines Machine-Learning-Modells ermittelt.*'\n"
                 f"Antworte auf Deutsch, präzise und professionell."
             )
