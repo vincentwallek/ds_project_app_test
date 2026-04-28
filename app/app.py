@@ -28,6 +28,8 @@ st.set_page_config(
 # ==========================================
 if "theme" not in st.session_state:
     st.session_state.theme = "dark"
+if "sidebar_visible" not in st.session_state:
+    st.session_state.sidebar_visible = True
 
 # --- Sidebar: Theme Toggle & Navigation ---
 with st.sidebar:
@@ -423,16 +425,27 @@ trained_models = load_models()
 
 @st.cache_data(ttl=600)
 def get_market_data(market_code):
+    """Load listings from Supabase. Handles both lowercase and capitalized column names."""
     try:
-        res = supabase.table("listings").select(
-            "brand, model, title, price, mileage, location, url"
-        ).eq("market", market_code).execute()
+        res = supabase.table("listings").select("*").execute()
         df = pd.DataFrame(res.data)
-        if not df.empty:
-            df['brand'] = df['brand'].str.lower()
-            df['model'] = df['model'].str.lower()
+        if df.empty:
+            return pd.DataFrame(columns=["brand", "model", "title", "price", "mileage", "location", "url"])
+        # Normalize column names to lowercase
+        df.columns = [c.lower() for c in df.columns]
+        # Filter by market (column may have been 'Market' or 'market')
+        if "market" in df.columns:
+            df = df[df["market"].str.upper() == market_code.upper()]
+        # Ensure required columns exist
+        for col in ["brand", "model", "title", "price", "mileage", "location", "url"]:
+            if col not in df.columns:
+                df[col] = ""
+        # Lowercase brand & model for consistent matching
+        df["brand"] = df["brand"].astype(str).str.lower().str.strip()
+        df["model"] = df["model"].astype(str).str.lower().str.strip()
         return df
-    except:
+    except Exception as e:
+        st.sidebar.caption(f"DB-Fehler: {e}")
         return pd.DataFrame(columns=["brand", "model", "title", "price", "mileage", "location", "url"])
 
 
@@ -499,10 +512,17 @@ def _fmt(s):
 
 def view_header():
     """Render the top header bar with logo, sidebar toggle, and back-navigation."""
+    # Inject CSS to hide sidebar when toggled off
+    if not st.session_state.sidebar_visible:
+        st.markdown(
+            '<style>[data-testid="stSidebar"] { display: none; }</style>',
+            unsafe_allow_html=True,
+        )
     col_toggle, col_logo, col_spacer, col_nav = st.columns([0.5, 2.5, 5, 2])
     with col_toggle:
-        if st.button("\u2630", key="sidebar_toggle", help="Seitenleiste oeffnen"):
-            pass  # clicking expands the sidebar automatically via Streamlit
+        if st.button("\u2630", key="sidebar_toggle", help="Seitenleiste ein-/ausblenden"):
+            st.session_state.sidebar_visible = not st.session_state.sidebar_visible
+            st.rerun()
     with col_logo:
         base_path = os.path.dirname(os.path.abspath(__file__))
         if st.session_state.theme == "dark":
@@ -529,7 +549,7 @@ def view_header():
     with col_nav:
         if st.session_state.page != "home":
             st.write("")
-            if st.button("Zurueck zum Dashboard", key="btn_back"):
+            if st.button("Zurück zum Dashboard", key="btn_back"):
                 nav("home")
                 st.rerun()
     st.markdown(f"<hr style='border:none;border-top:1px solid {T['divider']};margin:0.5rem 0 1.5rem 0;'>",
@@ -544,7 +564,7 @@ def view_home():
         <div class="av-hero">
             <h2>Professionelle Fahrzeugbewertung</h2>
             <p>Nutzen Sie Machine-Learning-Modelle, trainiert auf echten Marktdaten,
-            fuer praezise Fahrzeugbewertungen auf dem deutschen und US-Markt.</p>
+            für präzise Fahrzeugbewertungen auf dem deutschen und US-Markt.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -556,8 +576,8 @@ def view_home():
         st.markdown(
             f"""
             <div class="av-card">
-                <span class="card-tag">Verkaeufer</span>
-                <h3>Verkaeufer-Intelligenz</h3>
+                <span class="card-tag">Verkäufer</span>
+                <h3>Verkäufer-Intelligenz</h3>
                 <p>Geben Sie Ihre Fahrzeugdaten ein und erhalten Sie eine
                 datenbasierte Marktbewertung. Verstehen Sie, welche Merkmale
                 den Preis beeinflussen.</p>
@@ -579,8 +599,8 @@ def view_home():
         st.markdown(
             f"""
             <div class="av-card">
-                <span class="card-tag">Kaeufer</span>
-                <h3>Kaeufer-Intelligenz</h3>
+                <span class="card-tag">Käufer</span>
+                <h3>Käufer-Intelligenz</h3>
                 <p>Durchsuchen Sie echte Inserate, vergleichen Sie Preise mit
                 dem vorhergesagten Marktwert und finden Sie die besten
                 Angebote auf dem Markt.</p>
@@ -608,28 +628,44 @@ def view_app():
     csym = "\u20ac" if market == "DE" else "$"
     enc_cats = get_encoder_categories(trained_models, market)
 
-    role_de = "Verkaeufer" if role == "seller" else "Kaeufer"
+    role_de = "Verkäufer" if role == "seller" else "Käufer"
     st.subheader(f"{role_de}-Analyse  |  Markt: {market}")
     tab_engine, tab_chat = st.tabs(["Analyse", "AutoValue Assistent"])
 
     with tab_engine:
+        # Brand→Model fallback when db_data is unavailable
+        BRAND_MODELS = {
+            # DE
+            "mercedes-benz": ["c-klasse", "e-klasse", "s-klasse", "a-klasse", "b-klasse",
+                              "cla", "cls", "glc", "gle", "gla", "glb", "gls",
+                              "eqe", "eqs", "eqa", "eqb", "eqc", "v-klasse", "g-klasse"],
+            # US
+            "ford": ["f-150", "f-250", "f-350"],
+            "lexus": ["nx"],
+        }
         bm1, bm2 = st.columns(2)
         with bm1:
             brand_options = enc_cats.get("brand", sorted(db_data['brand'].unique()) if not db_data.empty else ["mercedes-benz"])
             brand = st.selectbox("Marke", brand_options, key="sel_brand", format_func=_fmt)
         with bm2:
-            model_options = ["c-klasse"]
+            # 1) Try db_data first, 2) fallback to BRAND_MODELS, 3) fallback to encoder
+            model_options = BRAND_MODELS.get(brand, ["unknown"])
             if not db_data.empty:
                 filtered = sorted(db_data[db_data['brand'] == brand]['model'].unique())
                 if filtered:
                     model_options = filtered
             model_name = st.selectbox("Modell", model_options, key="sel_model", format_func=_fmt)
 
+        # Advanced options toggle (outside form to avoid _arrow_right bug)
+        show_advanced = True
+        if role == "buyer":
+            show_advanced = st.toggle("Erweiterte Optionen anzeigen", value=False, key="show_advanced")
+
         with st.form("valuation_form"):
             if market == "DE":
-                _render_de_form_fields(enc_cats, role)
+                _render_de_form_fields(enc_cats, role, show_advanced)
             else:
-                _render_us_form_fields(enc_cats, db_data, brand, model_name, role)
+                _render_us_form_fields(enc_cats, db_data, brand, model_name, role, show_advanced)
             submitted = st.form_submit_button("Analyse starten")
 
         if submitted:
@@ -638,7 +674,7 @@ def view_app():
                 price, s_vals = predict_price(market, input_vals)
                 st.markdown(f"<hr style='border:none;border-top:1px solid {T['divider']};margin:1.5rem 0;'>",
                             unsafe_allow_html=True)
-                st.metric("Geschaetzter Marktwert", f"{csym}{price:,.2f}")
+                st.metric("Geschätzter Marktwert", f"{csym}{price:,.2f}")
 
                 if role == "seller" and s_vals:
                     st.markdown("### Einflussfaktoren auf den Preis")
@@ -662,7 +698,7 @@ def view_app():
                     for r in recs:
                         st.info(r["text"])
                 else:
-                    st.caption("Keine relevanten Empfehlungen fuer diese Konfiguration gefunden.")
+                    st.caption("Keine relevanten Empfehlungen für diese Konfiguration gefunden.")
 
     # ── Chat Tab ──
     with tab_chat:
@@ -670,7 +706,7 @@ def view_app():
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
             chat_m = genai.GenerativeModel(
                 "gemini-1.5-flash",
-                system_instruction=f"Du bist der AutoValue-Experte fuer den {market}-Markt. Antworte professionell und praezise auf Deutsch.",
+                system_instruction=f"Du bist der AutoValue-Experte für den {market}-Markt. Antworte professionell und präzise auf Deutsch.",
             )
             for m in st.session_state.chat_history:
                 with st.chat_message(m["role"]):
@@ -686,10 +722,10 @@ def view_app():
                     st.markdown(resp.text)
                 st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
         else:
-            st.info("Der Chat-Assistent benoetigt einen Gemini API-Key. Fuegen Sie GEMINI_API_KEY zu Ihren Streamlit Secrets hinzu.")
+            st.info("Der Chat-Assistent benötigt einen Gemini API-Key. Fügen Sie GEMINI_API_KEY zu Ihren Streamlit Secrets hinzu.")
 
 
-def _render_de_form_fields(enc_cats, role):
+def _render_de_form_fields(enc_cats, role, show_advanced):
     """Deutsche Markt-Eingabefelder."""
     st.markdown("#### Fahrzeugdaten")
     c1, c2, c3 = st.columns(3)
@@ -709,20 +745,17 @@ def _render_de_form_fields(enc_cats, role):
     st.markdown("#### Zustand")
     d1, d2, d3, d4 = st.columns(4)
     with d1:
-        st.checkbox("TUEV neu", key="de_tuv")
+        st.checkbox("TÜV neu", key="de_tuv")
     with d2:
         st.checkbox("Unfallfrei", key="de_unfall")
     with d3:
-        st.checkbox("Maengel vorhanden", key="de_mangel")
+        st.checkbox("Mängel vorhanden", key="de_mangel")
     with d4:
         st.checkbox("Scheckheft gepflegt", key="de_scheckh")
 
-    if role == "seller":
+    if show_advanced:
         st.markdown("#### Ausstattung")
         _render_de_equipment()
-    else:
-        with st.expander("Erweiterte Optionen (Ausstattung)"):
-            _render_de_equipment()
 
 
 def _render_de_equipment():
@@ -745,18 +778,18 @@ def _render_de_equipment():
         st.checkbox("Allwetterreifen", key="de_reifall")
 
 
-def _render_us_form_fields(enc_cats, db_data, brand, model_name, role):
+def _render_us_form_fields(enc_cats, db_data, brand, model_name, role, show_advanced):
     """US-Markt Eingabefelder."""
     st.markdown("#### Fahrzeugdaten")
     c1, c2, c3 = st.columns(3)
     with c1:
         st.number_input("Kilometerstand", 0, 500000, 30000, 5000, key="us_mileage")
         st.number_input("Alter (Jahre)", 0, 40, 3, key="us_age")
-        st.number_input("Unfaelle", 0, 10, 0, key="us_accidents")
+        st.number_input("Unfälle", 0, 10, 0, key="us_accidents")
     with c2:
         st.number_input("Vorbesitzer", 1, 10, 1, key="us_owners")
         st.number_input("Zylinder", 0, 16, 6, key="us_cyl")
-        st.number_input("Tueren", 2, 6, 4, key="us_doors")
+        st.number_input("Türen", 2, 6, 4, key="us_doors")
     with c3:
         st.number_input("Sitze", 1, 12, 5, key="us_seats")
         dt_opts = enc_cats.get("drivetrain", ["unknown"])
@@ -775,11 +808,9 @@ def _render_us_form_fields(enc_cats, db_data, brand, model_name, role):
         use_opts = enc_cats.get("usage_type", ["personal", "fleet"])
         st.selectbox("Nutzungsart", use_opts, key="us_usage", format_func=_fmt)
 
-    if role == "seller":
+    if show_advanced:
+        st.markdown("#### Erweiterte Optionen")
         _render_us_advanced(enc_cats)
-    else:
-        with st.expander("Erweiterte Optionen (Ausstattung, Motor, Farben)"):
-            _render_us_advanced(enc_cats)
 
 
 def _render_us_advanced(enc_cats):

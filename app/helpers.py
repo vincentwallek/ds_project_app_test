@@ -13,12 +13,12 @@ def _fmt_h(s):
 
 # ── Feature label mappings ─────────────────────────────────────────
 DE_BINARY_LABELS = {
-    "tuv_neu": "TUEV neu",
+    "tuv_neu": "TÜV neu",
     "scheckheft_gepflegt": "Scheckheft gepflegt",
     "bereifung_8_fach": "8-fach Bereifung",
     "bereifung_allwetter": "Allwetterreifen",
     "unfallfrei": "Unfallfrei",
-    "mangel_vorhanden": "Maengel vorhanden",
+    "mangel_vorhanden": "Mängel vorhanden",
     "ausstattung_distronic": "Distronic",
     "ausstattung_multibeam": "Multibeam LED",
     "ausstattung_klima_4_zonen": "4-Zonen Klima",
@@ -129,7 +129,7 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                     diff = base_price - alt_price
                     if role == "buyer" and diff > 500:
                         recs.append({
-                            "text": f"Ein '{_fmt_h(alt_m)}' mit gleicher Ausstattung wuerde ca. {diff:,.0f} {currency_symbol} weniger kosten.",
+                            "text": f"Ein '{_fmt_h(alt_m)}' mit gleicher Ausstattung würde ca. {diff:,.0f} {currency_symbol} weniger kosten.",
                             "saving": diff, "type": "alternative"
                         })
                 except:
@@ -149,7 +149,7 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                     diff = base_price - alt_price
                     if role == "buyer" and diff > 500:
                         recs.append({
-                            "text": f"Ein '{_fmt_h(alt_m)}' mit gleicher Ausstattung wuerde ca. ${diff:,.0f} weniger kosten.",
+                            "text": f"Ein '{_fmt_h(alt_m)}' mit gleicher Ausstattung würde ca. ${diff:,.0f} weniger kosten.",
                             "saving": diff, "type": "alternative"
                         })
                 except:
@@ -164,13 +164,13 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                 diff = base_price - alt_price
                 if role == "buyer" and diff > 300:
                     recs.append({
-                        "text": f"Ein {int(alt['cylinders'])}-Zylinder-Motor wuerde ca. ${diff:,.0f} sparen.",
+                        "text": f"Ein {int(alt['cylinders'])}-Zylinder-Motor würde ca. ${diff:,.0f} sparen.",
                         "saving": diff, "type": "saving"
                     })
                 elif role == "seller" and alt_price > base_price + 300:
                     gain = alt_price - base_price
                     recs.append({
-                        "text": f"Mit einem {int(input_data['cylinders'] + 2)}-Zylinder-Motor koennte der Preis um ca. ${gain:,.0f} steigen.",
+                        "text": f"Mit einem {int(input_data['cylinders'] + 2)}-Zylinder-Motor könnte der Preis um ca. ${gain:,.0f} steigen.",
                         "saving": gain, "type": "upgrade"
                     })
             except:
