@@ -18,9 +18,9 @@ from helpers import (
 # 1. PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="AutoValue | Vehicle Intelligence",
+    page_title="AutoValue | Fahrzeug-Intelligenz",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # ==========================================
@@ -28,23 +28,6 @@ st.set_page_config(
 # ==========================================
 if "theme" not in st.session_state:
     st.session_state.theme = "dark"
-if "sidebar_visible" not in st.session_state:
-    st.session_state.sidebar_visible = True
-
-# --- Sidebar: Theme Toggle & Navigation ---
-with st.sidebar:
-    st.markdown("### Einstellungen")
-    theme_label = "Zum hellen Modus wechseln" if st.session_state.theme == "dark" else "Zum dunklen Modus wechseln"
-    if st.button(theme_label, key="theme_toggle"):
-        st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
-        st.rerun()
-
-    st.markdown("---")
-    st.markdown(
-        f"<p style='font-size:0.78rem; color: {'#94a3b8' if st.session_state.theme == 'dark' else '#64748b'};'>"
-        "AutoValue v3.0 &middot; Fahrzeug-Intelligenz-Plattform</p>",
-        unsafe_allow_html=True,
-    )
 
 # --- Theme Palette ---
 if st.session_state.theme == "dark":
@@ -425,27 +408,54 @@ trained_models = load_models()
 
 @st.cache_data(ttl=600)
 def get_market_data(market_code):
-    """Load listings from Supabase. Handles both lowercase and capitalized column names."""
+    """Load listings from Supabase.
+    DE: from 'listing_de' table (has title column).
+    US: from 'listings' + 'listings_us' (compose title from brand+model+trim).
+    """
     try:
-        res = supabase.table("listings").select("*").execute()
-        df = pd.DataFrame(res.data)
-        if df.empty:
-            return pd.DataFrame(columns=["brand", "model", "title", "price", "mileage", "location", "url"])
-        # Normalize column names to lowercase
-        df.columns = [c.lower() for c in df.columns]
-        # Filter by market (column may have been 'Market' or 'market')
-        if "market" in df.columns:
-            df = df[df["market"].str.upper() == market_code.upper()]
-        # Ensure required columns exist
-        for col in ["brand", "model", "title", "price", "mileage", "location", "url"]:
-            if col not in df.columns:
-                df[col] = ""
-        # Lowercase brand & model for consistent matching
-        df["brand"] = df["brand"].astype(str).str.lower().str.strip()
-        df["model"] = df["model"].astype(str).str.lower().str.strip()
-        return df
+        if market_code.upper() == "DE":
+            res = supabase.table("listing_de").select("*").execute()
+            df = pd.DataFrame(res.data)
+            if df.empty:
+                return pd.DataFrame(columns=["brand", "model", "title", "price", "mileage", "location", "url"])
+            df.columns = [c.lower() for c in df.columns]
+            for col in ["brand", "model", "title", "price", "mileage", "location", "url"]:
+                if col not in df.columns:
+                    df[col] = ""
+            df["brand"] = df["brand"].astype(str).str.lower().str.strip()
+            df["model"] = df["model"].astype(str).str.lower().str.strip()
+            return df
+        else:
+            # US: load base listings and US-specific data
+            res_base = supabase.table("listings").select("*").execute()
+            df = pd.DataFrame(res_base.data)
+            if df.empty:
+                return pd.DataFrame(columns=["brand", "model", "title", "price", "mileage", "location", "url"])
+            df.columns = [c.lower() for c in df.columns]
+            # Try to load trim from listings_us
+            try:
+                res_us = supabase.table("listings_us").select("*").execute()
+                df_us = pd.DataFrame(res_us.data)
+                if not df_us.empty:
+                    df_us.columns = [c.lower() for c in df_us.columns]
+                    # Merge on id if available, otherwise just use trim column
+                    if "id" in df.columns and "id" in df_us.columns:
+                        df = df.merge(df_us[["id", "trim"]], on="id", how="left", suffixes=("", "_us"))
+                    elif "trim" in df_us.columns:
+                        df["trim"] = df_us["trim"].values[:len(df)] if len(df_us) >= len(df) else ""
+            except:
+                pass
+            for col in ["brand", "model", "price", "mileage", "location", "url"]:
+                if col not in df.columns:
+                    df[col] = ""
+            df["brand"] = df["brand"].astype(str).str.lower().str.strip()
+            df["model"] = df["model"].astype(str).str.lower().str.strip()
+            # Compose title from brand + model + trim
+            trim_col = df["trim"].astype(str).str.strip() if "trim" in df.columns else ""
+            df["title"] = (df["brand"].apply(_fmt) + " " + df["model"].apply(_fmt)
+                           + (" " + trim_col).where(trim_col.ne("") & trim_col.ne("nan"), ""))
+            return df
     except Exception as e:
-        st.sidebar.caption(f"DB-Fehler: {e}")
         return pd.DataFrame(columns=["brand", "model", "title", "price", "mileage", "location", "url"])
 
 
@@ -511,18 +521,8 @@ def _fmt(s):
 # ==========================================
 
 def view_header():
-    """Render the top header bar with logo, sidebar toggle, and back-navigation."""
-    # Inject CSS to hide sidebar when toggled off
-    if not st.session_state.sidebar_visible:
-        st.markdown(
-            '<style>[data-testid="stSidebar"] { display: none; }</style>',
-            unsafe_allow_html=True,
-        )
-    col_toggle, col_logo, col_spacer, col_nav = st.columns([0.5, 2.5, 5, 2])
-    with col_toggle:
-        if st.button("\u2630", key="sidebar_toggle", help="Seitenleiste ein-/ausblenden"):
-            st.session_state.sidebar_visible = not st.session_state.sidebar_visible
-            st.rerun()
+    """Render the top header bar with logo, theme toggle, and back-navigation."""
+    col_logo, col_spacer, col_theme, col_nav = st.columns([2.5, 5, 0.5, 2])
     with col_logo:
         base_path = os.path.dirname(os.path.abspath(__file__))
         if st.session_state.theme == "dark":
@@ -546,6 +546,12 @@ def view_header():
                 '<div class="av-logo-sub">Fahrzeug-Intelligenz</div></div></div>',
                 unsafe_allow_html=True,
             )
+    with col_theme:
+        # Sun/Moon theme toggle
+        icon = "\u2600\ufe0f" if st.session_state.theme == "dark" else "\U0001f319"
+        if st.button(icon, key="theme_toggle", help="Design wechseln"):
+            st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
+            st.rerun()
     with col_nav:
         if st.session_state.page != "home":
             st.write("")
@@ -687,10 +693,12 @@ def view_app():
                     st.markdown("### Passende Angebote")
                     matches = db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)].head(10)
                     if not matches.empty:
-                        st.dataframe(matches[["title", "price", "mileage", "url"]], use_container_width=True, hide_index=True)
-                        coords = [{"lat": lt, "lon": ln} for lt, ln in [get_coords(l) for l in matches['location']] if lt]
-                        if coords:
-                            st.map(pd.DataFrame(coords))
+                        display_cols = [c for c in ["title", "price", "mileage", "url"] if c in matches.columns]
+                        st.dataframe(matches[display_cols], use_container_width=True, hide_index=True)
+                        if "location" in matches.columns:
+                            coords = [{"lat": lt, "lon": ln} for lt, ln in [get_coords(l) for l in matches['location']] if lt]
+                            if coords:
+                                st.map(pd.DataFrame(coords))
 
                 st.markdown("### Empfehlungen")
                 recs = generate_recommendations(trained_models, market, input_vals, price, db_data, csym, role)
