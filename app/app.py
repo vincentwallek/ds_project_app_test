@@ -764,8 +764,18 @@ def _render_shap_display(s_vals, csym, input_vals):
 
 def view_header():
     """Render the top header bar with logo, theme toggle, and back-navigation."""
-    col_logo, col_spacer, col_nav, col_theme = st.columns([2.5, 4.5, 2, 1])
-    with col_logo:
+    if st.session_state.page == "home":
+        # Dashboard layout: Only space and the theme toggle on the right
+        col_spacer, col_theme = st.columns([9, 1])
+        with col_theme:
+            st.markdown('<div class="theme-toggle-col">', unsafe_allow_html=True)
+            icon = "☀️" if st.session_state.theme == "dark" else "🌙"
+            if st.button(icon, key="theme_toggle", help="Design wechseln"):
+                st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+        # Large centered logo ABOVE the divider line
         base_path = os.path.dirname(os.path.abspath(__file__))
         if st.session_state.theme == "dark":
             logo_path = os.path.join(base_path, "dark_logo.png")
@@ -773,15 +783,28 @@ def view_header():
             logo_path = os.path.join(base_path, "light_logo.png")
         if not os.path.exists(logo_path):
             logo_path = os.path.join(base_path, "logo.png")
+            
         if os.path.exists(logo_path):
-            if st.session_state.page == "home":
-                st.markdown(
-                    f'<div class="av-logo-wrap">'
-                    f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="110" height="110" />'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+            st.markdown(
+                f'<div style="display: flex; justify-content: center; margin-top: 1rem; margin-bottom: 2rem;">'
+                f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="320" height="320" />'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            
+    else:
+        # Standard sub-pages layout: Logo on the left, nav, theme toggle
+        col_logo, col_spacer, col_nav, col_theme = st.columns([2.5, 4.5, 2, 1])
+        with col_logo:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            if st.session_state.theme == "dark":
+                logo_path = os.path.join(base_path, "dark_logo.png")
             else:
+                logo_path = os.path.join(base_path, "light_logo.png")
+            if not os.path.exists(logo_path):
+                logo_path = os.path.join(base_path, "logo.png")
+                
+            if os.path.exists(logo_path):
                 st.markdown(
                     f'<div class="av-logo-wrap">'
                     f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="110" height="110" />'
@@ -789,27 +812,27 @@ def view_header():
                     f'<div class="av-logo-sub">Fahrzeug-Intelligenz</div></div></div>',
                     unsafe_allow_html=True,
                 )
-        else:
-            if st.session_state.page != "home":
+            else:
                 st.markdown(
                     '<div class="av-logo-wrap"><div>'
                     '<div class="av-logo-text">AutoValue</div>'
                     '<div class="av-logo-sub">Fahrzeug-Intelligenz</div></div></div>',
                     unsafe_allow_html=True,
                 )
-    with col_nav:
-        if st.session_state.page != "home":
+        with col_nav:
             st.write("")
             if st.button("Zurück zum Dashboard", key="btn_back"):
                 nav("home")
                 st.rerun()
-    with col_theme:
-        st.markdown('<div class="theme-toggle-col">', unsafe_allow_html=True)
-        icon = "☀️" if st.session_state.theme == "dark" else "🌙"
-        if st.button(icon, key="theme_toggle", help="Design wechseln"):
-            st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+                
+        with col_theme:
+            st.markdown('<div class="theme-toggle-col">', unsafe_allow_html=True)
+            icon = "☀️" if st.session_state.theme == "dark" else "🌙"
+            if st.button(icon, key="theme_toggle", help="Design wechseln"):
+                st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
     st.markdown(f"<hr style='border:none;border-top:1px solid {T['divider']};margin:0.5rem 0 1.5rem 0;'>",
                 unsafe_allow_html=True)
 
@@ -817,22 +840,6 @@ def view_header():
 
 def view_home():
     """Render the home / dashboard page."""
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    if st.session_state.theme == "dark":
-        logo_path = os.path.join(base_path, "dark_logo.png")
-    else:
-        logo_path = os.path.join(base_path, "light_logo.png")
-    if not os.path.exists(logo_path):
-        logo_path = os.path.join(base_path, "logo.png")
-        
-    if os.path.exists(logo_path):
-        st.markdown(
-            f'<div style="display: flex; justify-content: center; margin-top: 1rem; margin-bottom: 2.5rem;">'
-            f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="250" height="250" />'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
     st.markdown(
         f"""
         <div class="av-hero">
