@@ -11,7 +11,7 @@ import google.generativeai as genai
 import os
 
 # ==========================================
-# 1. PAGE CONFIGURATION & CLEAN TECH STYLING
+# 1. PAGE CONFIGURATION & FORCED LIGHT STYLE
 # ==========================================
 st.set_page_config(
     page_title="AutoValue | Vehicle Intelligence",
@@ -19,38 +19,57 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Professionelles "AutoValue" Design (Heller Hintergrund, dunkle Akzente)
+# Deep Clean Styling: Erzwingt Lesbarkeit unabhängig vom Browser-Theme
 st.markdown("""
     <style>
-        .main { background-color: #f8fafc; }
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        .stButton>button { 
-            width: 100%; 
-            background-color: #0f172a; 
-            color: white; 
-            border-radius: 6px; 
-            padding: 0.6rem; 
-            border: none; 
-            font-weight: 500; 
+        /* Hintergrund der gesamten App */
+        .stApp {
+            background-color: #f8fafc !important;
         }
-        .stButton>button:hover { background-color: #334155; color: white; }
+        /* Alle Texte auf Dunkelgrau für maximale Lesbarkeit */
+        .stMarkdown, p, h1, h2, h3, h4, span, label, .stSelectbox div {
+            color: #1e293b !important;
+        }
+        /* Dashboard Cards */
         .card { 
             background-color: #ffffff; 
             padding: 2rem; 
             border-radius: 12px; 
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); 
-            border: 1px solid #e5e7eb; 
-            margin-bottom: 1rem; 
-            color: #111827;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); 
+            border: 1px solid #e2e8f0; 
+            margin-bottom: 1.5rem;
+            min-height: 250px;
         }
-        h1, h2, h3 { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #0f172a !important; }
-        [data-testid="stMetricValue"] { color: #0f172a !important; }
+        /* Buttons: Tiefblau/Schwarz mit weißer Schrift */
+        .stButton>button { 
+            width: 100%; 
+            background-color: #0f172a !important; 
+            color: #ffffff !important; 
+            border-radius: 8px; 
+            padding: 0.7rem; 
+            border: none; 
+            font-weight: 600;
+        }
+        .stButton>button:hover {
+            background-color: #334155 !important;
+            color: #ffffff !important;
+        }
+        /* Tabs & Eingabefelder */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 24px;
+        }
+        .stTabs [data-baseweb="tab"] {
+            height: 50px;
+            white-space: pre-wrap;
+            background-color: transparent;
+            border-radius: 4px 4px 0px 0px;
+            color: #475569 !important;
+        }
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. STATE MANAGEMENT & ROUTING
+# 2. STATE MANAGEMENT & ROUTING (FIXED)
 # ==========================================
 if 'page' not in st.session_state: st.session_state.page = 'home'
 if 'role' not in st.session_state: st.session_state.role = None
@@ -59,10 +78,10 @@ if 'chat_history' not in st.session_state: st.session_state.chat_history = []
 
 
 def nav(page, role=None, market=None):
+    """Setzt States ohne sofortiges Rerun, um Warnungen zu vermeiden"""
     st.session_state.page = page
-    if role: st.session_state.role = role
-    if market: st.session_state.market = market
-    st.rerun()
+    st.session_state.role = role
+    st.session_state.market = market
 
 
 # ==========================================
@@ -130,24 +149,18 @@ def get_coords(loc_string):
 
 def predict_price(market, input_data):
     if not trained_models: return 0.0, None
-
     m_code = "de" if market == "DE" else "us"
-    model = trained_models[f"{m_code}_model"]
-    encoder = trained_models[f"{m_code}_encoder"]
-    num_cols = trained_models[f"{m_code}_num_cols"]
-
+    model, encoder, num_cols = trained_models[f"{m_code}_model"], trained_models[f"{m_code}_encoder"], trained_models[
+        f"{m_code}_num_cols"]
     cat_cols = ["brand", "model", "transmission", "fuel"] if market == "DE" else \
         ["brand", "model", "trim", "drivetrain", "fuel", "transmission", "body_style", "engine", "exterior_color",
          "interior_color", "usage_type"]
-
     df_input = pd.DataFrame([input_data])
     for col in num_cols:
         if col not in df_input.columns: df_input[col] = 0.0
-
     encoded_cats = encoder.transform(df_input[cat_cols])
     df_encoded = pd.DataFrame(encoded_cats, columns=encoder.get_feature_names_out(cat_cols), index=df_input.index)
     X_final = pd.concat([df_input[num_cols], df_encoded], axis=1)
-
     prediction = model.predict(X_final)[0]
     shap_values = shap.TreeExplainer(model)(X_final)
     return prediction, shap_values
@@ -168,7 +181,9 @@ def view_header():
     with col2:
         if st.session_state.page != 'home':
             st.write("<br>", unsafe_allow_html=True)
-            st.button("← Zurück zum Dashboard", on_click=nav, args=('home',))
+            if st.button("← Zurück zum Dashboard"):
+                nav("home")
+                st.rerun()
     st.divider()
 
 
@@ -184,19 +199,26 @@ def view_home():
         st.markdown(
             '<div class="card"><h3>Verkäufer-Intelligenz</h3><p>Eingeben. Bewerten. Verkaufen.</p><p style="font-size: 0.85rem; color: #64748b;">Analysieren Sie den Marktwert und Preis-Treiber Ihres Fahrzeugs.</p></div>',
             unsafe_allow_html=True)
-        if st.button("Bewertung starten (DE)", key="btn_s_de"): nav("app", "seller", "DE")
-        if st.button("Bewertung starten (US)", key="btn_s_us"): nav("app", "seller", "US")
+        if st.button("Bewertung starten (DE)", key="btn_s_de"):
+            nav("app", "seller", "DE")
+            st.rerun()
+        if st.button("Bewertung starten (US)", key="btn_s_us"):
+            nav("app", "seller", "US")
+            st.rerun()
     with col2:
         st.markdown(
             '<div class="card"><h3>Käufer-Intelligenz</h3><p>Finden. Vergleichen. Entscheiden.</p><p style="font-size: 0.85rem; color: #64748b;">Finden Sie faire Angebote und verstehen Sie Preisunterschiede.</p></div>',
             unsafe_allow_html=True)
-        if st.button("Inventar suchen (DE)", key="btn_b_de"): nav("app", "buyer", "DE")
-        if st.button("Inventar suchen (US)", key="btn_b_us"): nav("app", "buyer", "US")
+        if st.button("Inventar suchen (DE)", key="btn_b_de"):
+            nav("app", "buyer", "DE")
+            st.rerun()
+        if st.button("Inventar suchen (US)", key="btn_b_us"):
+            nav("app", "buyer", "US")
+            st.rerun()
 
 
 def view_app():
-    market = st.session_state.market
-    role = st.session_state.role
+    market, role = st.session_state.market, st.session_state.role
     db_data = get_market_data(market)
     currency = "€" if market == "DE" else "$"
 
@@ -212,7 +234,7 @@ def view_app():
                 models = sorted(db_data[db_data['brand'] == brand]['model'].unique()) if not db_data.empty else [
                     "c-klasse"]
                 model_name = st.selectbox("Modell", models)
-                variant = st.selectbox("Version (Title)",
+                variant = st.selectbox("Version",
                                        db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)][
                                            'title'].unique()) if not db_data.empty else "Standard"
                 age = st.number_input("Alter (Jahre)", 0, 30, 3)
@@ -229,7 +251,6 @@ def view_app():
                     power = st.number_input("Zylinder", 3, 12, 6)
                     opt1 = st.checkbox("Unfallfrei")
                     opt2 = st.checkbox("CPO Status")
-
             submitted = st.form_submit_button("Analyse starten")
 
         if submitted:
@@ -249,44 +270,38 @@ def view_app():
 
                 price, s_vals = predict_price(market, input_vals)
                 st.divider()
-                st.metric(f"Geschätzter Marktwert ({variant})", f"{price:,.2f} {currency}")
+                st.metric(f"Marktwert ({variant})", f"{price:,.2f} {currency}")
 
                 if role == "seller" and s_vals:
                     st.markdown("### Einflussfaktoren auf den Preis")
                     fig = plt.figure(figsize=(10, 6))
                     shap.plots.waterfall(s_vals[0], show=False)
-                    plt.subplots_adjust(left=0.35, right=0.9, top=0.9)
-                    st.pyplot(fig, clear_figure=True)
+                    plt.subplots_adjust(left=0.35, right=0.9)
+                    st.pyplot(fig)
 
                 if role == "buyer" and not db_data.empty:
-                    st.markdown("### Passende Angebote im Markt")
+                    st.markdown("### Passende Angebote")
                     matches = db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)].head(10)
-                    st.dataframe(matches[["title", "price", "mileage", "url"]],
-                                 column_config={
-                                     "price": st.column_config.NumberColumn("Preis", format="%d " + currency),
-                                     "url": st.column_config.LinkColumn("Link")},
-                                 use_container_width=True, hide_index=True)
+                    st.dataframe(matches[["title", "price", "mileage", "url"]], use_container_width=True,
+                                 hide_index=True)
                     coords = [{"lat": lt, "lon": ln} for lt, ln in [get_coords(l) for l in matches['location']] if lt]
                     if coords: st.map(pd.DataFrame(coords))
 
     with tab_chat:
         if "GEMINI_API_KEY" in st.secrets:
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-            chat_model = genai.GenerativeModel('gemini-1.5-flash',
-                                               system_instruction=f"Du bist der AutoValue Experte für den {market} Markt. Antworte professionell, ohne Emojis.")
+            chat_m = genai.GenerativeModel('gemini-1.5-flash',
+                                           system_instruction=f"Du bist der AutoValue Experte für {market}. Antworte seriös.")
             for m in st.session_state.chat_history:
                 with st.chat_message(m["role"]): st.markdown(m["content"])
-            if p := st.chat_input("Fragen zum Markt oder Werterhalt?"):
+            if p := st.chat_input("Fragen?"):
                 with st.chat_message("user"): st.markdown(p)
                 st.session_state.chat_history.append({"role": "user", "content": p})
-                with st.spinner("AutoValue denkt nach..."):
-                    h = [{"role": "user" if msg["role"] == "user" else "model", "parts": [msg["content"]]} for msg in
-                         st.session_state.chat_history[:-1]]
-                    resp = chat_model.start_chat(history=h).send_message(p)
-                    with st.chat_message("assistant"): st.markdown(resp.text)
-                    st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
-        else:
-            st.warning("Chat Assistant nicht konfiguriert (API Key fehlt).")
+                resp = chat_m.start_chat(
+                    history=[{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in
+                             st.session_state.chat_history[:-1]]).send_message(p)
+                with st.chat_message("assistant"): st.markdown(resp.text)
+                st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
 
 
 # ==========================================
