@@ -955,7 +955,7 @@ def view_app():
                 with st.spinner("Analysiere..."):
                     try:
                         messages = [sys_prompt] + st.session_state.chat_history
-                        resp = client.chat.completions.create(messages=messages, model="llama3-70b-8192").choices[0].message.content
+                        resp = client.chat.completions.create(messages=messages, model="llama-3.3-70b-versatile").choices[0].message.content
                         
                         with st.chat_message("assistant"): st.markdown(resp)
                         st.session_state.chat_history.append({"role": "assistant", "content": resp})
