@@ -983,10 +983,10 @@ def view_app():
             system_anweisung = (
                 f"Du bist der exklusive KI-Assistent von AutoValue für den {market}-Automarkt. Du berätst einen {rolle_text}.\n\n"
                 f"WICHTIGSTE REGELN:\n"
-                f"1. WERTVERLUST & PREISE: Nutze das Tool 'run_ml_prediction', um Preise zu berechnen. Wenn der Nutzer nach einem SPEZIFISCHEN Faktor fragt (z.B. 'Wertverlust nach 5 Jahren'), suche in den zurückgegebenen Einflussfaktoren GEZIELT nach 'car_age' (Fahrzeugalter) und nenne NUR diesen Wert! Lies nicht blind alle Preistreiber vor, wenn nicht danach gefragt wurde.\n"
-                f"2. BUDGET & KÄUFER-EMPFEHLUNGEN: Wenn der Nutzer ein Budget nennt (z.B. 'Auto bis 30.000€'), NUTZE DAS TOOL NICHT! Du hast keine Datenbank-Suchfunktion. Nenne allgemeine, passende Modelle dieser verfügbaren Marken ({verfuegbare_marken}), aber erfinde keine Schätzpreise. Verweise den Nutzer immer darauf, den Bereich 'Buyer Intelligence' (Inventar suchen) links im Dashboard zu nutzen, um aktuelle Angebote im Budget zu finden.\n"
-                f"3. Keine externen Quellen (KBB etc.) nutzen.\n"
-                f"4. Antworte auf Deutsch, präzise und direkt auf die gestellte Frage."
+                f"1. WERTVERLUST RICHTIG BERECHNEN: Wenn der Nutzer nach dem 'Wertverlust' über bestimmte Jahre fragt (z.B. nach 5 Jahren), MUSST du das Tool 'run_ml_prediction' ZWEIMAL aufrufen! Einmal für einen Neuwagen (car_age=0, mileage=0) und ein zweites Mal für das gefragte Alter (z.B. car_age=5, mileage=75000). Bilde dann die Differenz aus den beiden Werten 'berechneter_preis' und nenne dem Nutzer diesen echten Wertverlust. Nutze dafür NICHT die SHAP-Einflussfaktoren.\n"
+                f"2. PREIS-FAKTOREN ERKLÄREN: Nur wenn der Nutzer fragt 'Was drückt den Preis nach unten?' oder explizit nach bestimmten Ausstattungen fragt, schaust du in die 'alle_preis_einflussfaktoren' und nennst die passenden SHAP-Werte.\n"
+                f"3. BUDGET & KÄUFER-EMPFEHLUNGEN: Wenn der Nutzer ein Budget nennt (z.B. 'Auto bis 30.000€'), NUTZE DAS TOOL NICHT! Nenne allgemeine Modelle dieser Marken ({verfuegbare_marken}) und verweise auf die 'Buyer Intelligence' Suche links im Dashboard, um aktuelle Angebote im Budget zu finden.\n"
+                f"4. Keine externen Quellen (KBB etc.) nutzen. Antworte auf Deutsch, präzise und professionell."
             )
             
             sys_prompt = {"role": "system", "content": system_anweisung}
@@ -1035,11 +1035,12 @@ def view_app():
                         
                         response_msg = response.choices[0].message
                         
-                        # 2. Prüfen, ob Groq das Tool aufgerufen hat
+                        # 2. Prüfen, ob Groq das Tool aufgerufen hat (kann jetzt auch 2x aufgerufen werden!)
                         if response_msg.tool_calls:
-                            # Wir hängen die Tool-Entscheidung an die Historie an
+                            # Wir hängen die Tool-Entscheidungen an die Historie an
                             messages.append(response_msg)
                             
+                            # Arbeitet alle Tool-Aufrufe ab (z.B. Neuwagen UND Gebrauchtwagen)
                             for tool_call in response_msg.tool_calls:
                                 if tool_call.function.name == "run_ml_prediction":
                                     # Argumente von Groq auslesen
@@ -1055,7 +1056,7 @@ def view_app():
                                         "content": tool_result
                                     })
                             
-                            # 3. Zweiter Aufruf: Groq formuliert die finale Textantwort
+                            # 3. Zweiter Aufruf: Groq formuliert die finale Textantwort aus beiden Ergebnissen
                             final_response = client.chat.completions.create(
                                 model="llama-3.3-70b-versatile",
                                 messages=messages
