@@ -1,9 +1,10 @@
 streamlit
 pandas
+numpy
 xgboost
 scikit-learn
 shap
 matplotlib
 supabase
 geopy
-google-generativeai
+groq
