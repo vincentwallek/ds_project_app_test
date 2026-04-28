@@ -157,14 +157,14 @@ def view_home():
     col1, col2 = st.columns(2)
     with col1:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.h3("Seller Intelligence")
+        st.subheader("Seller Intelligence")
         st.markdown("Asset valuation and feature impact analysis for professionals.")
         if st.button("Evaluate Vehicle (DE)"): navigate('app', 'seller', 'DE')
         if st.button("Evaluate Vehicle (US)"): navigate('app', 'seller', 'US')
         st.markdown('</div>', unsafe_allow_html=True)
     with col2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.h3("Buyer Intelligence")
+        st.subheader("Buyer Intelligence")
         st.markdown("Market search, fair-price estimation and inventory tracking.")
         if st.button("Search Inventory (DE)"): navigate('app', 'buyer', 'DE')
         if st.button("Search Inventory (US)"): navigate('app', 'buyer', 'US')
