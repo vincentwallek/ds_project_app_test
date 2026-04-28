@@ -287,6 +287,38 @@ st.markdown(f"""
             overflow: hidden;
         }}
 
+        /* --- HTML Table (Passende Angebote) --- */
+        table {{
+            width: 100% !important;
+            border-collapse: collapse;
+            border-radius: 10px;
+            overflow: hidden;
+            font-size: 0.9rem;
+        }}
+        table th {{
+            background-color: {T['card_bg']};
+            color: {T['text_secondary']};
+            padding: 0.75rem 1rem;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid {T['divider']};
+        }}
+        table td {{
+            padding: 0.6rem 1rem;
+            border-bottom: 1px solid {T['divider']};
+            color: {T['text_primary']};
+        }}
+        table tr:hover {{
+            background-color: {T['card_bg']};
+        }}
+        table a {{
+            color: {T['accent']} !important;
+            text-decoration: none;
+        }}
+        table a:hover {{
+            text-decoration: underline;
+        }}
+
         /* --- Chat --- */
         .stChatMessage {{
             background-color: {T['card_bg']} !important;
@@ -581,14 +613,15 @@ def _translate_shap(name):
 
 
 def _render_shap_display(s_vals, csym):
-    """Render SHAP values as clean text-based impact cards."""
+    """Render SHAP values as clean text-based impact cards (excluding other model impacts)."""
     sv = s_vals[0]
     features = sv.feature_names
     values = sv.values
     base = sv.base_values
 
-    # Build sorted feature impact table
-    impacts = sorted(zip(features, values), key=lambda x: abs(x[1]), reverse=True)[:10]
+    # Filter out model_ features (other models are not relevant for the analysis)
+    impacts = [(f, v) for f, v in zip(features, values) if not f.startswith("model_")]
+    impacts = sorted(impacts, key=lambda x: abs(x[1]), reverse=True)[:10]
 
     st.caption(f"Basiswert (Durchschnitt): {csym}{base:,.0f}")
     for feat, val in impacts:
@@ -770,83 +803,135 @@ def view_app():
             with st.spinner("Marktwert wird berechnet ..."):
                 input_vals = _collect_inputs(market, brand, model_name)
                 price, s_vals = predict_price(market, input_vals)
-                st.markdown(f"<hr style='border:none;border-top:1px solid {T['divider']};margin:1.5rem 0;'>",
-                            unsafe_allow_html=True)
-                st.metric("Geschätzter Marktwert", f"{csym}{price:,.2f}")
+                # Store results in session_state so they persist across reruns
+                st.session_state.last_result = {
+                    "price": price, "s_vals": s_vals, "input_vals": input_vals,
+                    "brand": brand, "model_name": model_name,
+                    "market": market, "role": role, "csym": csym,
+                }
+                # Reset show-all states on new submission
+                st.session_state.show_all_matches = False
+                st.session_state.show_all_recs = False
 
-                if role == "seller" and s_vals:
-                    st.markdown("### Einflussfaktoren auf den Preis")
-                    _render_shap_display(s_vals, csym)
+        # ── Display results (persisted in session_state) ──
+        result = st.session_state.get("last_result")
+        if result and result.get("market") == market and result.get("role") == role:
+            price = result["price"]
+            s_vals = result["s_vals"]
+            input_vals = result["input_vals"]
+            res_brand = result["brand"]
+            res_model = result["model_name"]
 
-                if role == "buyer" and not db_data.empty:
-                    st.markdown("### Passende Angebote")
-                    matches = db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)]
-                    if not matches.empty:
-                        # Sort options
-                        sort_col, sort_asc = st.columns([2, 2])
-                        with sort_col:
-                            sort_option = st.selectbox("Sortieren nach", [
-                                "Preis aufsteigend", "Preis absteigend",
-                                "Kilometerstand aufsteigend", "Kilometerstand absteigend"
-                            ], key="sort_matches")
-                        sort_map = {
-                            "Preis aufsteigend": ("price", True),
-                            "Preis absteigend": ("price", False),
-                            "Kilometerstand aufsteigend": ("mileage", True),
-                            "Kilometerstand absteigend": ("mileage", False),
-                        }
-                        s_col, s_asc = sort_map[sort_option]
-                        if s_col in matches.columns:
-                            matches = matches.sort_values(s_col, ascending=s_asc, na_position="last")
+            st.markdown(f"<hr style='border:none;border-top:1px solid {T['divider']};margin:1.5rem 0;'>",
+                        unsafe_allow_html=True)
+            st.metric("Gesch\u00e4tzter Marktwert", f"{csym}{price:,.2f}")
 
-                        # Show count control
-                        show_all = st.session_state.get("show_all_matches", False)
-                        display_matches = matches if show_all else matches.head(20)
+            if role == "seller" and s_vals:
+                st.markdown("### Einflussfaktoren auf den Preis")
+                _render_shap_display(s_vals, csym)
 
-                        # Build display dataframe
-                        if market == "DE":
-                            # DE: show URL as clickable link
-                            disp = display_matches[[c for c in ["title", "price", "mileage"] if c in display_matches.columns]].copy()
-                            if "url" in display_matches.columns:
-                                disp["Link"] = display_matches["url"].apply(
-                                    lambda u: f'<a href="{u}" target="_blank">Zum Inserat</a>' if pd.notna(u) and str(u).startswith("http") else ""
-                                )
-                                st.markdown(disp.to_html(escape=False, index=False), unsafe_allow_html=True)
-                            else:
-                                st.dataframe(disp, use_container_width=True, hide_index=True)
-                        else:
-                            # US: no URL column
-                            disp_cols = [c for c in ["title", "price", "mileage"] if c in display_matches.columns]
-                            st.dataframe(display_matches[disp_cols], use_container_width=True, hide_index=True)
+            if role == "buyer" and not db_data.empty:
+                st.markdown("### Passende Angebote")
+                matches = db_data[(db_data['brand'] == res_brand) & (db_data['model'] == res_model)].copy()
 
-                        # Show all / location buttons
-                        if len(matches) > 20 and not show_all:
-                            if st.button(f"Alle {len(matches)} Angebote anzeigen", key="btn_show_all_matches"):
-                                st.session_state.show_all_matches = True
-                                st.rerun()
-                        elif show_all and len(matches) > 20:
-                            st.caption(f"{len(matches)} Angebote angezeigt.")
+                # Smart filtering: apply input criteria as bounds
+                user_mileage = input_vals.get("mileage", 0)
+                if user_mileage > 0 and "mileage" in matches.columns:
+                    matches["mileage"] = pd.to_numeric(matches["mileage"], errors="coerce")
+                    matches = matches[matches["mileage"].fillna(0) <= user_mileage]
+                user_age = input_vals.get("car_age", 0)
+                if user_age > 0 and "car_age" in matches.columns:
+                    matches["car_age"] = pd.to_numeric(matches["car_age"], errors="coerce")
+                    matches = matches[matches["car_age"].fillna(0) <= user_age]
+                user_owners = input_vals.get("owners", 0) if market == "DE" else input_vals.get("owner_count", 0)
+                if user_owners > 0 and "owners" in matches.columns:
+                    matches["owners"] = pd.to_numeric(matches["owners"], errors="coerce")
+                    matches = matches[matches["owners"].fillna(99) <= user_owners]
+                user_ps = input_vals.get("power_ps", 0)
+                if user_ps > 0 and "power_ps" in matches.columns:
+                    matches["power_ps"] = pd.to_numeric(matches["power_ps"], errors="coerce")
+                    matches = matches[matches["power_ps"].fillna(0) >= user_ps]
 
-                        if "location" in matches.columns:
-                            coords = [{"lat": lt, "lon": ln} for lt, ln in [get_coords(l) for l in display_matches['location'].head(20)] if lt]
-                            if coords:
-                                st.map(pd.DataFrame(coords))
+                if not matches.empty:
+                    # Location filter for map interaction
+                    filter_col, sort_col = st.columns([2, 2])
+                    with sort_col:
+                        sort_option = st.selectbox("Sortieren nach", [
+                            "Preis aufsteigend", "Preis absteigend",
+                            "Kilometerstand aufsteigend", "Kilometerstand absteigend"
+                        ], key="sort_matches")
+                    locations = []
+                    if "location" in matches.columns:
+                        locations = sorted(matches["location"].dropna().astype(str).unique())
+                        locations = [l for l in locations if l and l != "nan"]
+                    with filter_col:
+                        loc_options = ["Alle Standorte"] + locations
+                        loc_filter = st.selectbox("Standort filtern", loc_options, key="loc_filter")
+                    if loc_filter != "Alle Standorte" and "location" in matches.columns:
+                        matches = matches[matches["location"] == loc_filter]
+
+                    sort_map = {
+                        "Preis aufsteigend": ("price", True),
+                        "Preis absteigend": ("price", False),
+                        "Kilometerstand aufsteigend": ("mileage", True),
+                        "Kilometerstand absteigend": ("mileage", False),
+                    }
+                    s_c, s_a = sort_map[sort_option]
+                    if s_c in matches.columns:
+                        matches = matches.sort_values(s_c, ascending=s_a, na_position="last")
+
+                    # Show count control
+                    show_all = st.session_state.get("show_all_matches", False)
+                    display_matches = matches if show_all else matches.head(20)
+
+                    # Build display dataframe — full width
+                    if market == "DE":
+                        disp = display_matches[[c for c in ["title", "price", "mileage", "location"] if c in display_matches.columns]].copy()
+                        if "url" in display_matches.columns:
+                            disp["Link"] = display_matches["url"].apply(
+                                lambda u: f'<a href="{u}" target="_blank">Zum Inserat</a>' if pd.notna(u) and str(u).startswith("http") else ""
+                            )
+                        st.markdown(
+                            "<div style='width:100%;overflow-x:auto;'>" + disp.to_html(escape=False, index=False) + "</div>",
+                            unsafe_allow_html=True,
+                        )
                     else:
-                        st.caption("Keine passenden Angebote für diese Konfiguration gefunden.")
+                        disp_cols = [c for c in ["title", "price", "mileage", "location"] if c in display_matches.columns]
+                        st.dataframe(display_matches[disp_cols], use_container_width=True, hide_index=True)
 
-                st.markdown("### Empfehlungen")
-                recs = generate_recommendations(trained_models, market, input_vals, price, db_data, csym, role)
-                if recs:
-                    show_all_recs = st.session_state.get("show_all_recs", False)
-                    show_count = len(recs) if show_all_recs else min(5, len(recs))
-                    for r in recs[:show_count]:
-                        st.info(r["text"])
-                    if len(recs) > 5 and not show_all_recs:
-                        if st.button(f"Alle {len(recs)} Empfehlungen anzeigen", key="btn_show_all_recs"):
-                            st.session_state.show_all_recs = True
+                    if len(matches) > 20 and not show_all:
+                        if st.button(f"Alle {len(matches)} Angebote anzeigen", key="btn_show_all_matches"):
+                            st.session_state.show_all_matches = True
                             st.rerun()
+                    elif show_all and len(matches) > 20:
+                        st.caption(f"{len(matches)} Angebote angezeigt.")
+
+                    # Map with location data
+                    if "location" in display_matches.columns:
+                        map_data = []
+                        for _, row in display_matches.head(30).iterrows():
+                            lt, ln = get_coords(row.get("location", ""))
+                            if lt:
+                                map_data.append({"lat": lt, "lon": ln, "title": str(row.get("title", "")), "location": str(row.get("location", ""))})
+                        if map_data:
+                            st.caption("Klicken Sie auf einen Standort oben, um die Tabelle zu filtern.")
+                            st.map(pd.DataFrame(map_data))
                 else:
-                    st.caption("Keine relevanten Empfehlungen für diese Konfiguration gefunden.")
+                    st.caption("Keine passenden Angebote f\u00fcr diese Konfiguration gefunden.")
+
+            st.markdown("### Empfehlungen")
+            recs = generate_recommendations(trained_models, market, input_vals, price, db_data, csym, role)
+            if recs:
+                show_all_recs = st.session_state.get("show_all_recs", False)
+                show_count = len(recs) if show_all_recs else min(5, len(recs))
+                for r in recs[:show_count]:
+                    st.info(r["text"])
+                if len(recs) > 5 and not show_all_recs:
+                    if st.button(f"Alle {len(recs)} Empfehlungen anzeigen", key="btn_show_all_recs"):
+                        st.session_state.show_all_recs = True
+                        st.rerun()
+            else:
+                st.caption("Keine relevanten Empfehlungen f\u00fcr diese Konfiguration gefunden.")
 
     # ── Chat Tab ──
     with tab_chat:
