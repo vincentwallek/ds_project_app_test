@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from supabase import create_client
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
+import os
 
 # ==========================================
 # 1. PAGE CONFIGURATION & STYLING
@@ -48,21 +49,24 @@ geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 @st.cache_resource
 def load_models():
     models = {}
+    # Den genauen Pfad zu dem Ordner ermitteln, in dem die app.py liegt
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
     try:
         # DE Models
-        with open("car_price_xgboost.pkl", "rb") as f:
+        with open(os.path.join(base_dir, "car_price_xgboost.pkl"), "rb") as f:
             models["de_model"] = pickle.load(f)
-        with open("categorical_encoder.pkl", "rb") as f:
+        with open(os.path.join(base_dir, "categorical_encoder.pkl"), "rb") as f:
             models["de_encoder"] = pickle.load(f)
-        with open("numeric_columns.pkl", "rb") as f:
+        with open(os.path.join(base_dir, "numeric_columns.pkl"), "rb") as f:
             models["de_num_cols"] = pickle.load(f)
 
         # US Models
-        with open("car_price_xgboost_us.pkl", "rb") as f:
+        with open(os.path.join(base_dir, "car_price_xgboost_us.pkl"), "rb") as f:
             models["us_model"] = pickle.load(f)
-        with open("categorical_encoder_us.pkl", "rb") as f:
+        with open(os.path.join(base_dir, "categorical_encoder_us.pkl"), "rb") as f:
             models["us_encoder"] = pickle.load(f)
-        with open("numeric_columns_us.pkl", "rb") as f:
+        with open(os.path.join(base_dir, "numeric_columns_us.pkl"), "rb") as f:
             models["us_num_cols"] = pickle.load(f)
         return models
     except Exception as e:
