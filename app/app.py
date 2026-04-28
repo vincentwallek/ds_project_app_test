@@ -774,20 +774,29 @@ def view_header():
         if not os.path.exists(logo_path):
             logo_path = os.path.join(base_path, "logo.png")
         if os.path.exists(logo_path):
-            st.markdown(
-                f'<div class="av-logo-wrap">'
-                f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="80" height="80" />'
-                f'<div><div class="av-logo-text">AutoValue</div>'
-                f'<div class="av-logo-sub">Fahrzeug-Intelligenz</div></div></div>',
-                unsafe_allow_html=True,
-            )
+            if st.session_state.page == "home":
+                st.markdown(
+                    f'<div class="av-logo-wrap">'
+                    f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="110" height="110" />'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<div class="av-logo-wrap">'
+                    f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="110" height="110" />'
+                    f'<div><div class="av-logo-text">AutoValue</div>'
+                    f'<div class="av-logo-sub">Fahrzeug-Intelligenz</div></div></div>',
+                    unsafe_allow_html=True,
+                )
         else:
-            st.markdown(
-                '<div class="av-logo-wrap"><div>'
-                '<div class="av-logo-text">AutoValue</div>'
-                '<div class="av-logo-sub">Fahrzeug-Intelligenz</div></div></div>',
-                unsafe_allow_html=True,
-            )
+            if st.session_state.page != "home":
+                st.markdown(
+                    '<div class="av-logo-wrap"><div>'
+                    '<div class="av-logo-text">AutoValue</div>'
+                    '<div class="av-logo-sub">Fahrzeug-Intelligenz</div></div></div>',
+                    unsafe_allow_html=True,
+                )
     with col_nav:
         if st.session_state.page != "home":
             st.write("")
@@ -808,6 +817,22 @@ def view_header():
 
 def view_home():
     """Render the home / dashboard page."""
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    if st.session_state.theme == "dark":
+        logo_path = os.path.join(base_path, "dark_logo.png")
+    else:
+        logo_path = os.path.join(base_path, "light_logo.png")
+    if not os.path.exists(logo_path):
+        logo_path = os.path.join(base_path, "logo.png")
+        
+    if os.path.exists(logo_path):
+        st.markdown(
+            f'<div style="display: flex; justify-content: center; margin-top: 1rem; margin-bottom: 2.5rem;">'
+            f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="250" height="250" />'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
     st.markdown(
         f"""
         <div class="av-hero">
