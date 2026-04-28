@@ -9,6 +9,10 @@ from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 import google.generativeai as genai
 import os
+from helpers import (
+    img_to_base64, get_encoder_categories, generate_recommendations,
+    DE_BINARY_LABELS, DE_CONDITION_KEYS, DE_EQUIP_KEYS,
+)
 
 # ==========================================
 # 1. PAGE CONFIGURATION
@@ -486,47 +490,37 @@ def view_header():
     col_logo, col_spacer, col_nav = st.columns([2, 6, 2])
     with col_logo:
         base_path = os.path.dirname(os.path.abspath(__file__))
-        logo_path = os.path.join(base_path, "logo.png")
+        # Theme-aware logos
+        if st.session_state.theme == "dark":
+            logo_path = os.path.join(base_path, "dark_logo.png")
+        else:
+            logo_path = os.path.join(base_path, "light_logo.png")
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join(base_path, "logo.png")
         if os.path.exists(logo_path):
             st.markdown(
-                f"""
-                <div class="av-logo-wrap">
-                    <img src="data:image/png;base64,{_img_to_base64(logo_path)}" width="48" height="48" />
-                    <div>
-                        <div class="av-logo-text">AutoValue</div>
-                        <div class="av-logo-sub">Vehicle Intelligence</div>
-                    </div>
-                </div>
-                """,
+                f'<div class="av-logo-wrap">'
+                f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="48" height="48" />'
+                f'<div><div class="av-logo-text">AutoValue</div>'
+                f'<div class="av-logo-sub">Vehicle Intelligence</div></div></div>',
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                f"""
-                <div class="av-logo-wrap">
-                    <div>
-                        <div class="av-logo-text">AutoValue</div>
-                        <div class="av-logo-sub">Vehicle Intelligence</div>
-                    </div>
-                </div>
-                """,
+                '<div class="av-logo-wrap"><div>'
+                '<div class="av-logo-text">AutoValue</div>'
+                '<div class="av-logo-sub">Vehicle Intelligence</div></div></div>',
                 unsafe_allow_html=True,
             )
     with col_nav:
         if st.session_state.page != "home":
-            st.write("")  # vertical spacer
+            st.write("")
             if st.button("Back to Dashboard", key="btn_back"):
                 nav("home")
                 st.rerun()
     st.markdown(f"<hr style='border:none;border-top:1px solid {T['divider']};margin:0.5rem 0 1.5rem 0;'>",
                 unsafe_allow_html=True)
 
-
-def _img_to_base64(path):
-    """Convert an image file to a base64-encoded string for inline embedding."""
-    import base64
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
 
 
 def view_home():
@@ -598,83 +592,42 @@ def view_app():
     role = st.session_state.role
     db_data = get_market_data(market)
     currency = "EUR" if market == "DE" else "USD"
+    csym = "\u20ac" if market == "DE" else "$"
+    enc_cats = get_encoder_categories(trained_models, market)
 
     st.subheader(f"{role.capitalize()} Analysis  |  Market: {market}")
-
     tab_engine, tab_chat = st.tabs(["Analysis Engine", "AutoValue Assistant"])
 
-    # --- Analysis Engine Tab ---
     with tab_engine:
+        # ── Brand / Model selection (outside form for dynamic filtering) ──
+        bm1, bm2 = st.columns(2)
+        with bm1:
+            brand_options = enc_cats.get("brand", sorted(db_data['brand'].unique()) if not db_data.empty else ["mercedes-benz"])
+            brand = st.selectbox("Brand", brand_options, key="sel_brand")
+        with bm2:
+            model_options = enc_cats.get("model", ["c-klasse"])
+            if not db_data.empty:
+                filtered = sorted(db_data[db_data['brand'] == brand]['model'].unique())
+                if filtered:
+                    model_options = filtered
+            model_name = st.selectbox("Model", model_options, key="sel_model")
+
+        # ── Feature form ──
         with st.form("valuation_form"):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                brands = sorted(db_data['brand'].unique()) if not db_data.empty else ["mercedes-benz"]
-                brand = st.selectbox("Brand", brands)
-                models_list = (
-                    sorted(db_data[db_data['brand'] == brand]['model'].unique())
-                    if not db_data.empty
-                    else ["c-klasse"]
-                )
-                model_name = st.selectbox("Model", models_list)
-                variant = st.selectbox(
-                    "Variant",
-                    db_data[
-                        (db_data['brand'] == brand) & (db_data['model'] == model_name)
-                    ]['title'].unique(),
-                ) if not db_data.empty else "Standard"
-                age = st.number_input("Age (years)", 0, 30, 3)
-            with c2:
-                mileage = st.number_input("Mileage (km)", 0, 300000, 50000, 5000)
-                trans = st.selectbox("Transmission", ["automatic", "manual"])
-                fuel = st.selectbox("Fuel Type", ["benzin", "diesel", "elektro", "hybrid"])
-            with c3:
-                if market == "DE":
-                    power = st.number_input("Power (PS)", 50, 800, 150)
-                    opt1 = st.checkbox("Panoramic Roof")
-                    opt2 = st.checkbox("AMG Line")
-                else:
-                    power = st.number_input("Cylinders", 3, 12, 6)
-                    opt1 = st.checkbox("Accident-Free")
-                    opt2 = st.checkbox("CPO Status")
+            if market == "DE":
+                _render_de_form_fields(enc_cats, role)
+            else:
+                _render_us_form_fields(enc_cats, db_data, brand, model_name, role)
             submitted = st.form_submit_button("Run Analysis")
 
+        # ── Process submission ──
         if submitted:
             with st.spinner("Calculating market value ..."):
-                input_vals = {
-                    "brand": brand,
-                    "model": model_name,
-                    "car_age": float(age),
-                    "mileage": float(mileage),
-                    "transmission": trans,
-                    "fuel": fuel,
-                }
-                if market == "DE":
-                    input_vals.update({
-                        "power_ps": float(power),
-                        "owners": 1.0,
-                        "ausstattung_pano": 1.0 if opt1 else 0.0,
-                        "ausstattung_amg_line": 1.0 if opt2 else 0.0,
-                    })
-                else:
-                    input_vals.update({
-                        "cylinders": float(power),
-                        "has_accidents": 1.0 if opt1 else 0.0,
-                        "is_cpo": 1.0 if opt2 else 0.0,
-                        "doors": 4.0,
-                        "seats": 5.0,
-                        "trim": "unbekannt",
-                        "drivetrain": "unbekannt",
-                        "body_style": "unbekannt",
-                        "engine": "unbekannt",
-                        "exterior_color": "unbekannt",
-                        "interior_color": "unbekannt",
-                        "usage_type": "unbekannt",
-                    })
-
+                input_vals = _collect_inputs(market, brand, model_name)
                 price, s_vals = predict_price(market, input_vals)
                 st.markdown(f"<hr style='border:none;border-top:1px solid {T['divider']};margin:1.5rem 0;'>",
                             unsafe_allow_html=True)
-                st.metric(f"Estimated Market Value ({variant})", f"{price:,.2f} {currency}")
+                st.metric("Estimated Market Value", f"{csym}{price:,.2f}")
 
                 if role == "seller" and s_vals:
                     st.markdown("### Price Influence Factors")
@@ -685,32 +638,33 @@ def view_app():
 
                 if role == "buyer" and not db_data.empty:
                     st.markdown("### Matching Listings")
-                    matches = db_data[
-                        (db_data['brand'] == brand) & (db_data['model'] == model_name)
-                    ].head(10)
-                    st.dataframe(
-                        matches[["title", "price", "mileage", "url"]],
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-                    coords = [
-                        {"lat": lt, "lon": ln}
-                        for lt, ln in [get_coords(loc) for loc in matches['location']]
-                        if lt is not None
-                    ]
-                    if coords:
-                        st.map(pd.DataFrame(coords))
+                    matches = db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)].head(10)
+                    if not matches.empty:
+                        st.dataframe(matches[["title", "price", "mileage", "url"]], use_container_width=True, hide_index=True)
+                        coords = [{"lat": lt, "lon": ln} for lt, ln in [get_coords(l) for l in matches['location']] if lt]
+                        if coords:
+                            st.map(pd.DataFrame(coords))
 
-    # --- Chat Tab ---
+                # ── Recommendations ──
+                st.markdown("### Recommendations")
+                recs = generate_recommendations(trained_models, market, input_vals, price, db_data, csym)
+                if recs:
+                    for r in recs:
+                        icon = {
+                            "value_driver": "info-circle", "upgrade": "arrow-up-circle",
+                            "alternative": "shuffle", "downgrade": "arrow-down-circle",
+                        }.get(r["type"], "lightbulb")
+                        st.info(r["text"])
+                else:
+                    st.caption("No significant savings or upgrade opportunities detected for this configuration.")
+
+    # ── Chat Tab ──
     with tab_chat:
         if "GEMINI_API_KEY" in st.secrets:
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
             chat_m = genai.GenerativeModel(
                 "gemini-1.5-flash",
-                system_instruction=(
-                    f"You are the AutoValue expert for the {market} market. "
-                    "Answer professionally and concisely."
-                ),
+                system_instruction=f"You are the AutoValue expert for the {market} market. Answer professionally and concisely.",
             )
             for m in st.session_state.chat_history:
                 with st.chat_message(m["role"]):
@@ -720,19 +674,196 @@ def view_app():
                     st.markdown(p)
                 st.session_state.chat_history.append({"role": "user", "content": p})
                 resp = chat_m.start_chat(
-                    history=[
-                        {
-                            "role": "user" if m["role"] == "user" else "model",
-                            "parts": [m["content"]],
-                        }
-                        for m in st.session_state.chat_history[:-1]
-                    ]
+                    history=[{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in st.session_state.chat_history[:-1]]
                 ).send_message(p)
                 with st.chat_message("assistant"):
                     st.markdown(resp.text)
                 st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
         else:
             st.info("The chat assistant requires a Gemini API key. Add GEMINI_API_KEY to your Streamlit secrets.")
+
+
+def _render_de_form_fields(enc_cats, role):
+    """Render the German-market input fields inside the form."""
+    st.markdown("#### Vehicle Details")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.number_input("Mileage (km)", 0, 500000, 50000, 5000, key="de_mileage")
+        st.number_input("Age (years)", 0, 40, 3, key="de_age")
+        st.number_input("Power (PS)", 30, 1000, 150, key="de_power")
+    with c2:
+        st.number_input("Owners", 1, 10, 1, key="de_owners")
+        trans_opts = enc_cats.get("transmission", ["automatic", "manual"])
+        st.selectbox("Transmission", trans_opts, key="de_trans")
+        fuel_opts = enc_cats.get("fuel", ["benzin", "diesel", "elektro", "hybrid"])
+        st.selectbox("Fuel", fuel_opts, key="de_fuel")
+    with c3:
+        st.number_input("Warranty (months)", 0, 60, 0, key="de_garantie")
+
+    st.markdown("#### Condition")
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        st.checkbox("TUV New", key="de_tuv")
+    with d2:
+        st.checkbox("Accident-Free", key="de_unfall")
+    with d3:
+        st.checkbox("Defects Present", key="de_mangel")
+    with d4:
+        st.checkbox("Service Book", key="de_scheckh")
+
+    if role == "seller":
+        # Seller sees all equipment options directly
+        st.markdown("#### Equipment")
+        _render_de_equipment()
+    else:
+        # Buyer gets a collapsible advanced section
+        with st.expander("Advanced Options (Equipment)"):
+            _render_de_equipment()
+
+
+def _render_de_equipment():
+    """Render DE equipment checkboxes (reused by seller and buyer views)."""
+    e1, e2, e3, e4, e5 = st.columns(5)
+    with e1:
+        st.checkbox("Panoramic Roof", key="de_pano")
+        st.checkbox("AMG Line", key="de_amg")
+    with e2:
+        st.checkbox("Distronic", key="de_distronic")
+        st.checkbox("Multibeam LED", key="de_multibeam")
+    with e3:
+        st.checkbox("4-Zone Climate", key="de_klima4")
+        st.checkbox("2-Zone Climate", key="de_klima2")
+    with e4:
+        st.checkbox("Burmester 3D", key="de_burm3d")
+        st.checkbox("Burmester Std.", key="de_burmstd")
+    with e5:
+        st.checkbox("8-Tire Set", key="de_reif8")
+        st.checkbox("All-Weather Tires", key="de_reifall")
+
+
+def _render_us_form_fields(enc_cats, db_data, brand, model_name, role):
+    """Render the US-market input fields inside the form."""
+    st.markdown("#### Vehicle Details")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.number_input("Mileage", 0, 500000, 30000, 5000, key="us_mileage")
+        st.number_input("Age (years)", 0, 40, 3, key="us_age")
+        st.number_input("Accident Count", 0, 10, 0, key="us_accidents")
+    with c2:
+        st.number_input("Owner Count", 1, 10, 1, key="us_owners")
+        st.number_input("Cylinders", 0, 16, 6, key="us_cyl")
+        st.number_input("Doors", 2, 6, 4, key="us_doors")
+    with c3:
+        st.number_input("Seats", 1, 12, 5, key="us_seats")
+        dt_opts = enc_cats.get("drivetrain", ["unknown"])
+        st.selectbox("Drivetrain", dt_opts, key="us_drive")
+        fuel_opts = enc_cats.get("fuel", ["gasoline", "diesel", "electric", "hybrid"])
+        st.selectbox("Fuel", fuel_opts, key="us_fuel")
+
+    # Standard classification
+    st.markdown("#### Classification")
+    g1, g2 = st.columns(2)
+    with g1:
+        trans_opts = enc_cats.get("transmission", ["automatic", "manual"])
+        st.selectbox("Transmission", trans_opts, key="us_trans")
+        body_opts = enc_cats.get("body_style", ["sedan", "suv", "truck", "coupe"])
+        st.selectbox("Body Style", body_opts, key="us_body")
+    with g2:
+        use_opts = enc_cats.get("usage_type", ["personal", "fleet"])
+        st.selectbox("Usage Type", use_opts, key="us_usage")
+
+    if role == "seller":
+        # Seller sees all details directly
+        _render_us_advanced(enc_cats)
+    else:
+        # Buyer gets collapsible advanced section
+        with st.expander("Advanced Options (Trim, Engine, Colors)"):
+            _render_us_advanced(enc_cats)
+
+
+def _render_us_advanced(enc_cats):
+    """Render US advanced classification fields."""
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        trim_opts = enc_cats.get("trim", ["unknown"])
+        st.selectbox("Trim", trim_opts, key="us_trim_adv")
+    with f2:
+        eng_opts = enc_cats.get("engine", ["unknown"])
+        st.selectbox("Engine", eng_opts, key="us_engine")
+    with f3:
+        ext_opts = enc_cats.get("exterior_color", ["unknown"])
+        st.selectbox("Exterior Color", ext_opts, key="us_ext_color")
+    f4, f5 = st.columns(2)
+    with f4:
+        int_opts = enc_cats.get("interior_color", ["unknown"])
+        st.selectbox("Interior Color", int_opts, key="us_int_color")
+    with f5:
+        pass  # reserved for future fields
+
+
+def _b(key):
+    """Read a checkbox boolean from session_state and return 1.0/0.0."""
+    return 1.0 if st.session_state.get(key, False) else 0.0
+
+
+def _collect_inputs(market, brand, model_name):
+    """Collect all form widget values from session state into a model-input dict."""
+    if market == "DE":
+        return {
+            "brand": brand, "model": model_name,
+            "mileage": float(st.session_state.de_mileage),
+            "car_age": float(st.session_state.de_age),
+            "power_ps": float(st.session_state.de_power),
+            "owners": float(st.session_state.de_owners),
+            "transmission": st.session_state.de_trans,
+            "fuel": st.session_state.de_fuel,
+            "garantie_monate": float(st.session_state.de_garantie),
+            "tuv_neu": _b("de_tuv"),
+            "unfallfrei": _b("de_unfall"),
+            "mangel_vorhanden": _b("de_mangel"),
+            "scheckheft_gepflegt": _b("de_scheckh"),
+            "ausstattung_pano": _b("de_pano"),
+            "ausstattung_amg_line": _b("de_amg"),
+            "ausstattung_distronic": _b("de_distronic"),
+            "ausstattung_multibeam": _b("de_multibeam"),
+            "ausstattung_klima_4_zonen": _b("de_klima4"),
+            "ausstattung_klima_2_zonen": _b("de_klima2"),
+            "ausstattung_burmester_3d": _b("de_burm3d"),
+            "ausstattung_burmester_standard": _b("de_burmstd"),
+            "bereifung_8_fach": _b("de_reif8"),
+            "bereifung_allwetter": _b("de_reifall"),
+        }
+    else:
+        acc = int(st.session_state.us_accidents)
+        own = int(st.session_state.us_owners)
+        usage = st.session_state.us_usage
+        return {
+            "brand": brand, "model": model_name,
+            "mileage": float(st.session_state.us_mileage),
+            "car_age": float(st.session_state.us_age),
+            "accident_count": float(acc),
+            "owner_count": float(own),
+            "cylinders": float(st.session_state.us_cyl),
+            "doors": float(st.session_state.us_doors),
+            "seats": float(st.session_state.us_seats),
+            "trim": st.session_state.get("us_trim_adv", st.session_state.get("us_trim", "unknown")),
+            "drivetrain": st.session_state.us_drive,
+            "fuel": st.session_state.us_fuel,
+            "transmission": st.session_state.us_trans,
+            "body_style": st.session_state.us_body,
+            "engine": st.session_state.get("us_engine", "unknown"),
+            "exterior_color": st.session_state.get("us_ext_color", "unknown"),
+            "interior_color": st.session_state.get("us_int_color", "unknown"),
+            "usage_type": usage,
+            # Derived binary features
+            "one_owner": 1.0 if own == 1 else 0.0,
+            "has_accidents": 1.0 if acc > 0 else 0.0,
+            "is_used": 1.0,
+            "is_cpo": 0.0,
+            "is_online": 0.0,
+            "is_wholesale": 0.0,
+            "personal_use": 1.0 if "personal" in str(usage).lower() else 0.0,
+        }
 
 
 # ==========================================
