@@ -944,36 +944,51 @@ def view_app():
         if "GROQ_API_KEY" in st.secrets:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             
-            # Dynamischer System Prompt basierend auf aktueller Rolle und Markt
+            # 1. Dynamischer Chat-Verlauf (trennt US/DE und Käufer/Verkäufer)
+            chat_key = f"chat_{market}_{role}"
+            if chat_key not in st.session_state:
+                st.session_state[chat_key] = []
+                
+            # 2. Verfügbare Marken aus der Datenbank holen, um den Bot einzuschränken
+            verfuegbare_marken = ", ".join(sorted(db_data['brand'].dropna().unique())) if not db_data.empty else "unserer Datenbank"
             rolle_text = "Verkäufer" if role == "seller" else "Käufer"
             
+            # 3. Der strenge System-Prompt
             system_anweisung = (
-                f"Du bist der professionelle KI-Assistent von AutoValue, spezialisiert auf den {market}-Automarkt. "
-                f"Du berätst aktuell einen {rolle_text}. "
-                f"Deine Aufgabe ist es, fundierte Fragen zu beantworten, z.B. zu Wertverlusten, Kaufempfehlungen "
-                f"basierend auf Budgets, spezifischen Ausstattungen (wie AMG Line) oder Markttrends. "
-                f"Sei hilfsbereit, nutze dein umfangreiches Wissen über Autos und den Markt, und gib realistische Schätzungen. "
-                f"Erwähne bei genauen Preisanfragen gerne, dass AutoValue zusätzlich ein Machine-Learning-Modell "
-                f"im Tab 'Analysis Engine' für exakte Berechnungen anbietet. "
-                f"Antworte immer auf Deutsch, professionell und übersichtlich."
+                f"Du bist der exklusive KI-Assistent von AutoValue für den {market}-Automarkt. Du berätst einen {rolle_text}.\n\n"
+                f"STRIKTE REGELN FÜR DEINE ANTWORTEN:\n"
+                f"1. KAUFEMPFEHLUNGEN: Du darfst NUR Fahrzeuge dieser Marken empfehlen, die wir aktuell in der Datenbank haben: {verfuegbare_marken}. Empfiehl NIEMALS Modelle von Herstellern, die nicht in dieser Liste stehen (z.B. keine generischen Honda oder Toyota, wenn wir sie nicht führen)!\n"
+                f"2. KEINE EXTERNEN QUELLEN: Nenne NIEMALS Kelley Blue Book, KBB, Schwacke, Mobile.de oder Edmunds.\n"
+                f"3. PREISE & WERTVERLUST: Erfinde keine pauschalen Wertverluste (wie 'sinkt um 40%'). Erkläre dem Nutzer, dass der Wertverlust stark von Ausstattung und Motor abhängt und er für exakte Zahlen die 'Analysis Engine' hier im Dashboard nutzen soll.\n"
+                f"4. VERHALTEN: Sei professionell, hilfsbereit und antworte auf Deutsch."
             )
             
             sys_prompt = {"role": "system", "content": system_anweisung}
 
-            for m in st.session_state.chat_history:
-                with st.chat_message(m["role"]): st.markdown(m["content"])
+            # 4. Chatverlauf anzeigen (mit sauberen Icons statt "face"/"smart_toy")
+            for m in st.session_state[chat_key]:
+                avatar_icon = "👤" if m["role"] == "user" else "🤖"
+                with st.chat_message(m["role"], avatar=avatar_icon): 
+                    st.markdown(m["content"])
 
             if p := st.chat_input("Fragen zu Fahrzeugen, Budget oder Werterhalt?"):
-                with st.chat_message("user"): st.markdown(p)
-                st.session_state.chat_history.append({"role": "user", "content": p})
+                # Neues User-Icon
+                with st.chat_message("user", avatar="👤"): 
+                    st.markdown(p)
+                st.session_state[chat_key].append({"role": "user", "content": p})
 
                 with st.spinner("AutoValue Assistent analysiert..."):
                     try:
-                        messages = [sys_prompt] + st.session_state.chat_history
+                        # Historie für die API vorbereiten (nur Text, ohne Avatar-Infos)
+                        history_for_api = [{"role": msg["role"], "content": msg["content"]} for msg in st.session_state[chat_key][:-1]]
+                        messages = [sys_prompt] + history_for_api
+                        
                         resp = client.chat.completions.create(messages=messages, model="llama-3.3-70b-versatile").choices[0].message.content
                         
-                        with st.chat_message("assistant"): st.markdown(resp)
-                        st.session_state.chat_history.append({"role": "assistant", "content": resp})
+                        # Neues Assistant-Icon
+                        with st.chat_message("assistant", avatar="🤖"): 
+                            st.markdown(resp)
+                        st.session_state[chat_key].append({"role": "assistant", "content": resp})
                     except Exception as e:
                         st.error(f"Verbindungsfehler: {e}")
         else:
