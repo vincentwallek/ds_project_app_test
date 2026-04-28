@@ -612,7 +612,7 @@ def _translate_shap(name):
     return name.replace("_", " ").title()
 
 
-def _render_shap_display(s_vals, csym):
+def _render_shap_display(s_vals, csym, input_vals):
     """Render SHAP values as clean text-based impact cards (excluding other model impacts)."""
     sv = s_vals[0]
     features = sv.feature_names
@@ -625,7 +625,13 @@ def _render_shap_display(s_vals, csym):
 
     st.caption(f"Basiswert (Durchschnitt): {csym}{base:,.0f}")
     for feat, val in impacts:
-        label = _translate_shap(feat)
+        if feat in DE_BINARY_LABELS:
+            is_active = input_vals.get(feat, 0.0) == 1.0
+            prefix = "Mit" if is_active else "Ohne"
+            label = f"{prefix} {DE_BINARY_LABELS[feat]}"
+        else:
+            label = _translate_shap(feat)
+            
         direction = "\u2191" if val > 0 else "\u2193"
         color = "#22c55e" if val > 0 else "#ef4444"
         bg = "rgba(34,197,94,0.1)" if val > 0 else "rgba(239,68,68,0.1)"
@@ -828,7 +834,7 @@ def view_app():
 
             if role == "seller" and s_vals:
                 st.markdown("### Einflussfaktoren auf den Preis")
-                _render_shap_display(s_vals, csym)
+                _render_shap_display(s_vals, csym, input_vals)
 
             if role == "buyer" and not db_data.empty:
                 st.markdown("### Passende Angebote")
