@@ -945,7 +945,7 @@ def view_app():
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             
             # System Persona für Llama 3 - Strenges Grounding auf die App
-            fahrzeug_kontext = f"{brand.title()} {model_name.upper()} ({variant}) mit {mileage} km und {age} Jahren."
+            fahrzeug_kontext = f"{str(brand).title()} {str(model_name).upper()} ({str(variant)}) mit {mileage} km und {age} Jahren."
             
             strikter_text = (
                 f"Du bist der exklusive AutoValue KI-Assistent für den {market} Markt.\n"
