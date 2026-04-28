@@ -7,6 +7,7 @@ from supabase import create_client
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 from groq import Groq
+import json
 import os
 from helpers import (
     img_to_base64, get_encoder_categories, generate_recommendations,
@@ -559,6 +560,36 @@ def predict_price(market, input_data):
     shap_values = shap.TreeExplainer(model)(X_final)
     return prediction, shap_values
 
+def run_ml_prediction(market, brand, model_name, car_age, mileage, transmission="automatic", fuel="benzin", power_ps=150, cylinders=6):
+    """Dieses Tool wird vom LLM aufgerufen, um echte ML-Preise zu berechnen."""
+    if market == "DE":
+        input_vals = {"brand": brand.lower(), "model": model_name.lower(), "car_age": float(car_age), "mileage": float(mileage),
+                      "transmission": transmission, "fuel": fuel, "power_ps": float(power_ps), "owners": 1.0,
+                      "ausstattung_pano": 0.0, "ausstattung_amg_line": 0.0}
+    else:
+        input_vals = {"brand": brand.lower(), "model": model_name.lower(), "car_age": float(car_age), "mileage": float(mileage),
+                      "transmission": transmission, "fuel": fuel, "cylinders": float(cylinders), "engine": "unbekannt",
+                      "has_accidents": 0.0, "is_cpo": 0.0, "doors": 4.0, "seats": 5.0, "trim": "unbekannt", 
+                      "drivetrain": "unbekannt", "body_style": "unbekannt", "exterior_color": "unbekannt", 
+                      "interior_color": "unbekannt", "usage_type": "unbekannt"}
+
+    price, s_vals = predict_price(market, input_vals)
+    
+    if s_vals is None:
+        return json.dumps({"error": "Modell konnte nicht geladen werden."})
+        
+    # Die wichtigsten SHAP-Werte extrahieren
+    impacts = list(zip(s_vals[0].feature_names, s_vals[0].values))
+    top_impacts = sorted(impacts, key=lambda x: abs(x[1]), reverse=True)[:5]
+    impact_dict = {feat: round(float(val), 2) for feat, val in top_impacts}
+    
+    result = {
+        "berechneter_preis": round(float(price), 2),
+        "waehrung": "€" if market == "DE" else "$",
+        "wichtigste_preistreiber": impact_dict
+    }
+    return json.dumps(result)
+
 
 # ==========================================
 # 6. DISPLAY HELPERS
@@ -944,55 +975,104 @@ def view_app():
         if "GROQ_API_KEY" in st.secrets:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             
-            # 1. Dynamischer Chat-Verlauf (trennt US/DE und Käufer/Verkäufer)
             chat_key = f"chat_{market}_{role}"
             if chat_key not in st.session_state:
                 st.session_state[chat_key] = []
                 
-            # 2. Verfügbare Marken aus der Datenbank holen, um den Bot einzuschränken
-            verfuegbare_marken = ", ".join(sorted(db_data['brand'].dropna().unique())) if not db_data.empty else "unserer Datenbank"
             rolle_text = "Verkäufer" if role == "seller" else "Käufer"
+            verfuegbare_marken = ", ".join(sorted(db_data['brand'].dropna().unique())) if not db_data.empty else "unserer Datenbank"
             
-            # 3. Der strenge System-Prompt
             system_anweisung = (
-                f"Du bist der exklusive KI-Assistent von AutoValue für den {market}-Automarkt. Du berätst einen {rolle_text}.\n\n"
-                f"STRIKTE REGELN FÜR DEINE ANTWORTEN:\n"
-                f"1. KAUFEMPFEHLUNGEN: Du darfst NUR Fahrzeuge dieser Marken empfehlen, die wir aktuell in der Datenbank haben: {verfuegbare_marken}. Empfiehl NIEMALS Modelle von Herstellern, die nicht in dieser Liste stehen (z.B. keine generischen Honda oder Toyota, wenn wir sie nicht führen)!\n"
-                f"2. KEINE EXTERNEN QUELLEN: Nenne NIEMALS Kelley Blue Book, KBB, Schwacke, Mobile.de oder Edmunds.\n"
-                f"3. PREISE & WERTVERLUST: Erfinde keine pauschalen Wertverluste (wie 'sinkt um 40%'). Erkläre dem Nutzer, dass der Wertverlust stark von Ausstattung und Motor abhängt und er für exakte Zahlen die 'Analysis Engine' hier im Dashboard nutzen soll.\n"
-                f"4. VERHALTEN: Sei professionell, hilfsbereit und antworte auf Deutsch."
+                f"Du bist der exklusive KI-Assistent von AutoValue für den {market}-Automarkt. Du berätst einen {rolle_text}.\n"
+                f"WICHTIG: Wenn der Nutzer nach dem Wert eines Fahrzeugs fragt oder wissen will, wie viel ein Fahrzeug verliert, MUSST du dein Tool 'run_ml_prediction' aufrufen, um den Preis und die Preis-Einflussfaktoren (SHAP) zu berechnen!\n"
+                f"Rate niemals Preise und nutze niemals externe Quellen (wie KBB oder Schwacke).\n"
+                f"Wenn du das Tool genutzt hast, präsentiere dem Nutzer die Ergebnisse (Preis und Preistreiber) übersichtlich auf Deutsch.\n"
+                f"Kaufempfehlungen darfst du nur für diese Marken aussprechen: {verfuegbare_marken}."
             )
             
             sys_prompt = {"role": "system", "content": system_anweisung}
 
-            # 4. Chatverlauf anzeigen (mit sauberen Icons statt "face"/"smart_toy")
+            # Definition des Werkzeugs für Groq
+            tools = [{
+                "type": "function",
+                "function": {
+                    "name": "run_ml_prediction",
+                    "description": "Berechnet den exakten Marktwert und die Preis-Einflussfaktoren über unser XGBoost ML-Modell.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "market": {"type": "string", "enum": ["DE", "US"], "description": "Markt (DE oder US)"},
+                            "brand": {"type": "string", "description": "Automarke"},
+                            "model_name": {"type": "string", "description": "Modellname"},
+                            "car_age": {"type": "number", "description": "Alter in Jahren"},
+                            "mileage": {"type": "number", "description": "Kilometerstand"},
+                        },
+                        "required": ["market", "brand", "model_name", "car_age", "mileage"]
+                    }
+                }
+            }]
+
             for m in st.session_state[chat_key]:
                 avatar_icon = "👤" if m["role"] == "user" else "🤖"
                 with st.chat_message(m["role"], avatar=avatar_icon): 
                     st.markdown(m["content"])
 
-            if p := st.chat_input("Fragen zu Fahrzeugen, Budget oder Werterhalt?"):
-                # Neues User-Icon
-                with st.chat_message("user", avatar="👤"): 
-                    st.markdown(p)
+            if p := st.chat_input("Fragen zu Fahrzeugen, Werterhalt oder Budget?"):
+                with st.chat_message("user", avatar="👤"): st.markdown(p)
                 st.session_state[chat_key].append({"role": "user", "content": p})
 
-                with st.spinner("AutoValue Assistent analysiert..."):
+                with st.spinner("AutoValue Assistent denkt nach..."):
                     try:
-                        # Historie für die API vorbereiten (nur Text, ohne Avatar-Infos)
                         history_for_api = [{"role": msg["role"], "content": msg["content"]} for msg in st.session_state[chat_key][:-1]]
-                        messages = [sys_prompt] + history_for_api
+                        messages = [sys_prompt] + history_for_api + [{"role": "user", "content": p}]
                         
-                        resp = client.chat.completions.create(messages=messages, model="llama-3.3-70b-versatile").choices[0].message.content
+                        # 1. Anfrage an Groq (darf Tools nutzen)
+                        response = client.chat.completions.create(
+                            model="llama-3.3-70b-versatile",
+                            messages=messages,
+                            tools=tools,
+                            tool_choice="auto"
+                        )
                         
-                        # Neues Assistant-Icon
-                        with st.chat_message("assistant", avatar="🤖"): 
-                            st.markdown(resp)
-                        st.session_state[chat_key].append({"role": "assistant", "content": resp})
+                        response_msg = response.choices[0].message
+                        
+                        # 2. Prüfen, ob Groq das Tool aufgerufen hat
+                        if response_msg.tool_calls:
+                            # Wir hängen die Tool-Entscheidung an die Historie an
+                            messages.append(response_msg)
+                            
+                            for tool_call in response_msg.tool_calls:
+                                if tool_call.function.name == "run_ml_prediction":
+                                    # Argumente von Groq auslesen
+                                    args = json.loads(tool_call.function.arguments)
+                                    # Unsere Python-Funktion ausführen!
+                                    tool_result = run_ml_prediction(**args)
+                                    
+                                    # Ergebnis an Groq zurücksenden
+                                    messages.append({
+                                        "tool_call_id": tool_call.id,
+                                        "role": "tool",
+                                        "name": "run_ml_prediction",
+                                        "content": tool_result
+                                    })
+                            
+                            # 3. Zweiter Aufruf: Groq formuliert die finale Textantwort
+                            final_response = client.chat.completions.create(
+                                model="llama-3.3-70b-versatile",
+                                messages=messages
+                            )
+                            final_text = final_response.choices[0].message.content
+                        else:
+                            # Groq hat normal geantwortet (ohne Tool)
+                            final_text = response_msg.content
+
+                        with st.chat_message("assistant", avatar="🤖"): st.markdown(final_text)
+                        st.session_state[chat_key].append({"role": "assistant", "content": final_text})
+                        
                     except Exception as e:
-                        st.error(f"Verbindungsfehler: {e}")
+                        st.error(f"Fehler bei der KI-Anfrage: {e}")
         else:
-            st.warning("Chat Assistant nicht konfiguriert (GROQ_API_KEY fehlt in den Secrets).")
+            st.warning("Chat Assistant nicht konfiguriert (GROQ_API_KEY fehlt).")
 
 
 def _render_de_form_fields(enc_cats, role, show_advanced):
