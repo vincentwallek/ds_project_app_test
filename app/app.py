@@ -768,7 +768,7 @@ def view_header():
         # Dashboard layout: Only space and the theme toggle on the right
         col_spacer, col_theme = st.columns([9, 1])
         with col_theme:
-            st.markdown('<div class="theme-toggle-col">', unsafe_allow_html=True)
+            st.markdown('<div class="theme-toggle-col" style="position: relative; z-index: 9999;">', unsafe_allow_html=True)
             icon = "☀️" if st.session_state.theme == "dark" else "🌙"
             if st.button(icon, key="theme_toggle", help="Design wechseln"):
                 st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
@@ -786,7 +786,7 @@ def view_header():
             
         if os.path.exists(logo_path):
             st.markdown(
-                f'<div style="display: flex; justify-content: center; margin-top: -6rem; margin-bottom: 2rem;">'
+                f'<div style="display: flex; justify-content: center; margin-top: -6rem; margin-bottom: 2rem; pointer-events: none;">'
                 f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="300" />'
                 f'</div>',
                 unsafe_allow_html=True,
