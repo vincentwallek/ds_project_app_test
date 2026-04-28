@@ -924,18 +924,39 @@ def view_app():
             "ford": ["f-150", "f-250", "f-350"],
             "lexus": ["nx"],
         }
-        bm1, bm2 = st.columns(2)
+        if market == "DE":
+            bm1, bm2, bm3 = st.columns(3)
+        else:
+            bm1, bm2 = st.columns(2)
+            
         with bm1:
             brand_options = enc_cats.get("brand", sorted(db_data['brand'].unique()) if not db_data.empty else ["mercedes-benz"])
             brand = st.selectbox("Marke", brand_options, key="sel_brand", format_func=_fmt)
         with bm2:
-            # 1) Try db_data first, 2) fallback to BRAND_MODELS, 3) fallback to encoder
             model_options = BRAND_MODELS.get(brand, ["unknown"])
             if not db_data.empty:
                 filtered = sorted(db_data[db_data['brand'] == brand]['model'].unique())
                 if filtered:
                     model_options = filtered
             model_name = st.selectbox("Modell", model_options, key="sel_model", format_func=_fmt)
+            
+        if market == "DE":
+            with bm3:
+                motor_options = ["Alle"]
+                if not db_data.empty:
+                    subset = db_data[(db_data["brand"] == brand) & (db_data["model"] == model_name)]
+                    if "title" in subset.columns:
+                        import re
+                        brand_pattern = re.compile(rf'\b{re.escape(str(brand))}\b', re.IGNORECASE)
+                        extracted = []
+                        for t in subset["title"].dropna().unique():
+                            t_clean = brand_pattern.sub('', str(t)).strip()
+                            t_clean = re.sub(r'\s+', ' ', t_clean)
+                            if t_clean:
+                                extracted.append(t_clean)
+                        if extracted:
+                            motor_options = ["Alle"] + sorted(list(set(extracted)))
+                st.selectbox("Motorleistung / Trim", motor_options, key="sel_motorleistung")
 
         # Advanced options toggle (outside form to avoid _arrow_right bug)
         show_advanced = True
@@ -983,6 +1004,17 @@ def view_app():
             if role == "buyer" and not db_data.empty:
                 st.markdown("### Passende Angebote")
                 matches = db_data[(db_data['brand'] == res_brand) & (db_data['model'] == res_model)].copy()
+
+                if market == "DE" and "sel_motorleistung" in st.session_state:
+                    sel_trim = st.session_state.sel_motorleistung
+                    if sel_trim != "Alle":
+                        import re
+                        brand_pattern = re.compile(rf'\b{re.escape(str(res_brand))}\b', re.IGNORECASE)
+                        def matches_trim(row):
+                            title_clean = brand_pattern.sub('', str(row.get("title", ""))).strip()
+                            title_clean = re.sub(r'\s+', ' ', title_clean)
+                            return title_clean.lower() == sel_trim.lower()
+                        matches = matches[matches.apply(matches_trim, axis=1)]
 
                 # Smart filtering: apply input criteria as bounds
                 user_mileage = input_vals.get("mileage", 0)
@@ -1205,12 +1237,41 @@ def view_app():
 
 def _render_de_form_fields(enc_cats, role, show_advanced):
     """Deutsche Markt-Eingabefelder."""
+    brand = st.session_state.get("sel_brand", "")
+    model_name = st.session_state.get("sel_model", "")
+    sel_trim = st.session_state.get("sel_motorleistung", "Alle")
+    
+    default_ps = 150
+    if sel_trim != "Alle" and brand and model_name:
+        db_data = get_market_data("DE")
+        if not db_data.empty and "power_ps" in db_data.columns and "title" in db_data.columns:
+            subset = db_data[(db_data["brand"] == brand) & (db_data["model"] == model_name)]
+            import re
+            brand_pattern = re.compile(rf'\b{re.escape(str(brand))}\b', re.IGNORECASE)
+            
+            matching_ps = []
+            for _, row in subset.iterrows():
+                t = str(row["title"])
+                ps = row["power_ps"]
+                if pd.isna(ps) or float(ps) <= 0:
+                    continue
+                t_clean = brand_pattern.sub('', t).strip()
+                t_clean = re.sub(r'\s+', ' ', t_clean)
+                if t_clean.lower() == sel_trim.lower():
+                    matching_ps.append(float(ps))
+            
+            if matching_ps:
+                import numpy as np
+                default_ps = int(np.median(matching_ps))
+
     st.markdown("#### Fahrzeugdaten")
     c1, c2, c3 = st.columns(3)
     with c1:
         st.number_input("Kilometerstand", 0, 500000, 50000, 5000, key="de_mileage")
         st.number_input("Alter (Jahre)", 0, 40, 3, key="de_age")
-        st.number_input("Leistung (PS)", 30, 1000, 150, key="de_power")
+        # Check if user already entered a different PS value to avoid overwriting typed input
+        current_ps = st.session_state.get("de_power", float(default_ps))
+        st.number_input("Leistung (PS)", 30, 1000, int(current_ps), key="de_power")
     with c2:
         st.number_input("Vorbesitzer", 1, 10, 1, key="de_owners")
         trans_opts = enc_cats.get("transmission", ["automatic", "manual"])
