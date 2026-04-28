@@ -81,16 +81,22 @@ def predict_price_fast(trained_models, market, input_data):
 
 def generate_recommendations(trained_models, market, input_data, base_price, db_data, currency_symbol, role="buyer"):
     """Generate role-aware recommendations.
-    Buyer: only show options that reduce the price (savings).
-    Seller: only show options that increase the price (upgrades).
+    Buyer: savings (remove features, lower mileage, alternatives).
+    Seller: upgrades (add equipment only — no condition features).
     """
     recs = []
     if not trained_models:
         return recs
 
     if market == "DE":
-        all_binary = DE_CONDITION_KEYS + DE_EQUIP_KEYS
-        for key in all_binary:
+        # Seller: only equipment keys (adding 'Unfallfrei' makes no sense)
+        # Buyer: all keys (condition + equipment)
+        if role == "seller":
+            toggle_keys = DE_EQUIP_KEYS
+        else:
+            toggle_keys = DE_CONDITION_KEYS + DE_EQUIP_KEYS
+
+        for key in toggle_keys:
             if key not in input_data:
                 continue
             alt = dict(input_data)
@@ -115,8 +121,29 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                     "saving": gain, "type": "upgrade"
                 })
 
-        # Alternative models from same brand
-        if not db_data.empty:
+        # Mileage-based recommendations for buyers
+        if role == "buyer":
+            current_mileage = input_data.get("mileage", 0)
+            if current_mileage > 20000:
+                for km_less in [10000, 20000, 50000]:
+                    if current_mileage - km_less < 5000:
+                        continue
+                    alt = dict(input_data)
+                    alt["mileage"] = current_mileage - km_less
+                    try:
+                        alt_price = predict_price_fast(trained_models, market, alt)
+                        diff = alt_price - base_price
+                        if diff > 200:
+                            recs.append({
+                                "text": f"Fahrzeuge mit {km_less:,.0f} km weniger Laufleistung kosten ca. {diff:,.0f} {currency_symbol} mehr — achte auf Angebote mit weniger Kilometern!",
+                                "saving": diff, "type": "mileage_tip"
+                            })
+                            break  # Only show best mileage suggestion
+                    except:
+                        continue
+
+        # Alternative models from same brand (buyer only)
+        if role == "buyer" and not db_data.empty:
             brand = input_data.get("brand", "")
             current_model = input_data.get("model", "")
             alt_models = [m for m in db_data[db_data["brand"] == brand]["model"].unique()
@@ -127,7 +154,7 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                 try:
                     alt_price = predict_price_fast(trained_models, market, alt)
                     diff = base_price - alt_price
-                    if role == "buyer" and diff > 500:
+                    if diff > 500:
                         recs.append({
                             "text": f"Ein '{_fmt_h(alt_m)}' mit gleicher Ausstattung würde ca. {diff:,.0f} {currency_symbol} weniger kosten.",
                             "saving": diff, "type": "alternative"
@@ -136,7 +163,8 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                     pass
 
     else:  # US
-        if not db_data.empty:
+        # Alternative models (buyer only)
+        if role == "buyer" and not db_data.empty:
             brand = input_data.get("brand", "")
             current_model = input_data.get("model", "")
             alt_models = [m for m in db_data[db_data["brand"] == brand]["model"].unique()
@@ -147,13 +175,34 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                 try:
                     alt_price = predict_price_fast(trained_models, market, alt)
                     diff = base_price - alt_price
-                    if role == "buyer" and diff > 500:
+                    if diff > 500:
                         recs.append({
                             "text": f"Ein '{_fmt_h(alt_m)}' mit gleicher Ausstattung würde ca. ${diff:,.0f} weniger kosten.",
                             "saving": diff, "type": "alternative"
                         })
                 except:
                     pass
+
+        # Mileage-based recommendations for buyers
+        if role == "buyer":
+            current_mileage = input_data.get("mileage", 0)
+            if current_mileage > 20000:
+                for miles_less in [10000, 20000, 50000]:
+                    if current_mileage - miles_less < 5000:
+                        continue
+                    alt = dict(input_data)
+                    alt["mileage"] = current_mileage - miles_less
+                    try:
+                        alt_price = predict_price_fast(trained_models, market, alt)
+                        diff = alt_price - base_price
+                        if diff > 200:
+                            recs.append({
+                                "text": f"Fahrzeuge mit {miles_less:,.0f} Meilen weniger kosten ca. ${diff:,.0f} mehr — achte auf niedrigere Laufleistung!",
+                                "saving": diff, "type": "mileage_tip"
+                            })
+                            break
+                    except:
+                        continue
 
         # Cylinder alternatives
         if input_data.get("cylinders", 0) > 4:
@@ -177,5 +226,6 @@ def generate_recommendations(trained_models, market, input_data, base_price, db_
                 pass
 
     recs.sort(key=lambda r: r["saving"], reverse=True)
-    return recs[:5]
+    return recs  # Return ALL — UI handles display limit
+
 

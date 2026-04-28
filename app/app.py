@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import pickle
 import shap
-import matplotlib.pyplot as plt
 from supabase import create_client
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
@@ -18,9 +17,9 @@ from helpers import (
 # 1. PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="AutoValue | Vehicle Intelligence",
+    page_title="AutoValue | Fahrzeug-Intelligenz",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # ==========================================
@@ -28,23 +27,6 @@ st.set_page_config(
 # ==========================================
 if "theme" not in st.session_state:
     st.session_state.theme = "dark"
-if "sidebar_visible" not in st.session_state:
-    st.session_state.sidebar_visible = True
-
-# --- Sidebar: Theme Toggle & Navigation ---
-with st.sidebar:
-    st.markdown("### Einstellungen")
-    theme_label = "Zum hellen Modus wechseln" if st.session_state.theme == "dark" else "Zum dunklen Modus wechseln"
-    if st.button(theme_label, key="theme_toggle"):
-        st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
-        st.rerun()
-
-    st.markdown("---")
-    st.markdown(
-        f"<p style='font-size:0.78rem; color: {'#94a3b8' if st.session_state.theme == 'dark' else '#64748b'};'>"
-        "AutoValue v3.0 &middot; Fahrzeug-Intelligenz-Plattform</p>",
-        unsafe_allow_html=True,
-    )
 
 # --- Theme Palette ---
 if st.session_state.theme == "dark":
@@ -110,19 +92,27 @@ st.markdown(f"""
             font-family: 'Inter', sans-serif !important;
         }}
 
-        /* --- Sidebar --- */
+        /* --- Hide sidebar completely --- */
         section[data-testid="stSidebar"] {{
-            background-color: {T['bg_secondary']} !important;
-            border-right: 1px solid {T['divider']} !important;
+            display: none !important;
         }}
-        section[data-testid="stSidebar"] .stMarkdown,
-        section[data-testid="stSidebar"] p,
-        section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3,
-        section[data-testid="stSidebar"] span,
-        section[data-testid="stSidebar"] label {{
-            color: {T['text_primary']} !important;
+        [data-testid="collapsedControl"] {{
+            display: none !important;
+        }}
+
+        /* --- Theme toggle icon button --- */
+        .theme-toggle-col .stButton > button {{
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            font-size: 1.5rem;
+            padding: 0.25rem 0.5rem;
+            min-width: auto;
+            width: auto;
+        }}
+        .theme-toggle-col .stButton > button:hover {{
+            background: transparent !important;
+            transform: scale(1.15);
         }}
 
         /* --- Typography --- */
@@ -425,28 +415,72 @@ trained_models = load_models()
 
 @st.cache_data(ttl=600)
 def get_market_data(market_code):
-    """Load listings from Supabase. Handles both lowercase and capitalized column names."""
+    """Load listings from Supabase with proper table joins.
+    DE: listings + listing_de (title) + listing_features (equipment).
+    US: listings + listing_us (trim, engine, etc.).
+    All linked via listings.id = *.listing_id.
+    """
+    empty = pd.DataFrame(columns=["brand", "model", "title", "price", "mileage", "location", "url"])
     try:
-        res = supabase.table("listings").select("*").execute()
+        # 1. Load base listings filtered by market
+        res = supabase.table("listings").select("*").eq("market", market_code.upper()).execute()
         df = pd.DataFrame(res.data)
         if df.empty:
-            return pd.DataFrame(columns=["brand", "model", "title", "price", "mileage", "location", "url"])
-        # Normalize column names to lowercase
+            return empty
         df.columns = [c.lower() for c in df.columns]
-        # Filter by market (column may have been 'Market' or 'market')
-        if "market" in df.columns:
-            df = df[df["market"].str.upper() == market_code.upper()]
+        df["brand"] = df["brand"].astype(str).str.lower().str.strip()
+        df["model"] = df["model"].astype(str).str.lower().str.strip()
+
+        if market_code.upper() == "DE":
+            # 2a. Join listing_de (title, transmission, fuel, etc.)
+            try:
+                res_de = supabase.table("listing_de").select("*").execute()
+                df_de = pd.DataFrame(res_de.data)
+                if not df_de.empty:
+                    df_de.columns = [c.lower() for c in df_de.columns]
+                    df = df.merge(df_de, left_on="id", right_on="listing_id",
+                                  how="left", suffixes=("", "_de"))
+            except:
+                pass
+            # 2b. Join listing_features (equipment booleans)
+            try:
+                res_feat = supabase.table("listing_features").select("*").execute()
+                df_feat = pd.DataFrame(res_feat.data)
+                if not df_feat.empty:
+                    df_feat.columns = [c.lower() for c in df_feat.columns]
+                    # Fix DB typo: standart -> standard
+                    if "ausstattung_burmester_standart" in df_feat.columns:
+                        df_feat = df_feat.rename(columns={"ausstattung_burmester_standart": "ausstattung_burmester_standard"})
+                    df = df.merge(df_feat, left_on="id", right_on="listing_id",
+                                  how="left", suffixes=("", "_feat"))
+            except:
+                pass
+            # Ensure title column
+            if "title" not in df.columns:
+                df["title"] = df["brand"].apply(_fmt) + " " + df["model"].apply(_fmt)
+        else:
+            # 2. Join listing_us (trim, engine, colors, etc.)
+            try:
+                res_us = supabase.table("listing_us").select("*").execute()
+                df_us = pd.DataFrame(res_us.data)
+                if not df_us.empty:
+                    df_us.columns = [c.lower() for c in df_us.columns]
+                    df = df.merge(df_us, left_on="id", right_on="listing_id",
+                                  how="left", suffixes=("", "_us"))
+            except:
+                pass
+            # Compose title: Brand Model Trim
+            trim_col = df["trim"].astype(str).str.strip() if "trim" in df.columns else pd.Series([""] * len(df))
+            df["title"] = (df["brand"].apply(_fmt) + " " + df["model"].apply(_fmt)
+                           + (" " + trim_col).where(trim_col.ne("") & trim_col.ne("nan"), ""))
+
         # Ensure required columns exist
         for col in ["brand", "model", "title", "price", "mileage", "location", "url"]:
             if col not in df.columns:
                 df[col] = ""
-        # Lowercase brand & model for consistent matching
-        df["brand"] = df["brand"].astype(str).str.lower().str.strip()
-        df["model"] = df["model"].astype(str).str.lower().str.strip()
         return df
-    except Exception as e:
-        st.sidebar.caption(f"DB-Fehler: {e}")
-        return pd.DataFrame(columns=["brand", "model", "title", "price", "mileage", "location", "url"])
+    except Exception:
+        return empty
 
 
 @st.cache_data
@@ -506,23 +540,80 @@ def _fmt(s):
     return "-".join(p.upper() if (p.isalpha() and len(p) <= 3) else p.capitalize() for p in parts)
 
 
+# --- SHAP Label Translation ---
+_SHAP_DIRECT = {
+    "mileage": "Kilometerstand", "car_age": "Fahrzeugalter",
+    "power_ps": "Leistung (PS)", "owners": "Vorbesitzer",
+    "garantie_monate": "Garantie (Monate)", "cylinders": "Zylinder",
+    "doors": "T\u00fcren", "seats": "Sitze", "accident_count": "Unf\u00e4lle",
+    "owner_count": "Vorbesitzer", "one_owner": "Erstbesitzer",
+    "has_accidents": "Hat Unf\u00e4lle", "is_used": "Gebraucht",
+    "is_cpo": "Zertifiziert", "is_online": "Online-Kauf",
+    "is_wholesale": "Gro\u00dfhandel", "personal_use": "Privatnutzung",
+    "tuv_neu": "T\u00dcV neu", "unfallfrei": "Unfallfrei",
+    "mangel_vorhanden": "M\u00e4ngel", "scheckheft_gepflegt": "Scheckheft",
+    "ausstattung_pano": "Panoramadach", "ausstattung_amg_line": "AMG Line",
+    "ausstattung_distronic": "Distronic", "ausstattung_multibeam": "Multibeam LED",
+    "ausstattung_klima_4_zonen": "4-Zonen Klima", "ausstattung_klima_2_zonen": "2-Zonen Klima",
+    "ausstattung_burmester_3d": "Burmester 3D", "ausstattung_burmester_standard": "Burmester Std.",
+    "bereifung_8_fach": "8-fach Bereifung", "bereifung_allwetter": "Allwetterreifen",
+    "price_per_km": "Preis/km", "price_per_mile": "Preis/Meile",
+    "listing_age_days": "Inseratsalter (Tage)",
+}
+_SHAP_PREFIX = {
+    "brand_": "Marke", "model_": "Modell", "fuel_": "Kraftstoff",
+    "transmission_": "Getriebe", "drivetrain_": "Antrieb",
+    "body_style_": "Karosserie", "engine_": "Motor",
+    "exterior_color_": "Au\u00dfenfarbe", "interior_color_": "Innenfarbe",
+    "usage_type_": "Nutzungsart", "trim_": "Ausstattungslinie",
+}
+
+
+def _translate_shap(name):
+    """Translate encoded SHAP feature name to readable German."""
+    if name in _SHAP_DIRECT:
+        return _SHAP_DIRECT[name]
+    for prefix, label in _SHAP_PREFIX.items():
+        if name.startswith(prefix):
+            value = name[len(prefix):]
+            return f"{label}: {_fmt(value)}"
+    return name.replace("_", " ").title()
+
+
+def _render_shap_display(s_vals, csym):
+    """Render SHAP values as clean text-based impact cards."""
+    sv = s_vals[0]
+    features = sv.feature_names
+    values = sv.values
+    base = sv.base_values
+
+    # Build sorted feature impact table
+    impacts = sorted(zip(features, values), key=lambda x: abs(x[1]), reverse=True)[:10]
+
+    st.caption(f"Basiswert (Durchschnitt): {csym}{base:,.0f}")
+    for feat, val in impacts:
+        label = _translate_shap(feat)
+        direction = "\u2191" if val > 0 else "\u2193"
+        color = "#22c55e" if val > 0 else "#ef4444"
+        bg = "rgba(34,197,94,0.1)" if val > 0 else "rgba(239,68,68,0.1)"
+        st.markdown(
+            f"<div style='display:flex;justify-content:space-between;align-items:center;"
+            f"padding:0.6rem 1rem;margin:0.3rem 0;border-radius:8px;"
+            f"background:{bg};border-left:3px solid {color};'>"
+            f"<span style='color:{T['text_primary']};font-size:0.9rem;'>{label}</span>"
+            f"<span style='color:{color};font-weight:600;font-size:0.9rem;'>"
+            f"{direction} {val:+,.0f} {csym}</span></div>",
+            unsafe_allow_html=True,
+        )
+
+
 # ==========================================
 # 7. UI VIEWS
 # ==========================================
 
 def view_header():
-    """Render the top header bar with logo, sidebar toggle, and back-navigation."""
-    # Inject CSS to hide sidebar when toggled off
-    if not st.session_state.sidebar_visible:
-        st.markdown(
-            '<style>[data-testid="stSidebar"] { display: none; }</style>',
-            unsafe_allow_html=True,
-        )
-    col_toggle, col_logo, col_spacer, col_nav = st.columns([0.5, 2.5, 5, 2])
-    with col_toggle:
-        if st.button("\u2630", key="sidebar_toggle", help="Seitenleiste ein-/ausblenden"):
-            st.session_state.sidebar_visible = not st.session_state.sidebar_visible
-            st.rerun()
+    """Render the top header bar with logo, theme toggle, and back-navigation."""
+    col_logo, col_spacer, col_nav, col_theme = st.columns([2.5, 4.5, 2, 1])
     with col_logo:
         base_path = os.path.dirname(os.path.abspath(__file__))
         if st.session_state.theme == "dark":
@@ -552,6 +643,13 @@ def view_header():
             if st.button("Zurück zum Dashboard", key="btn_back"):
                 nav("home")
                 st.rerun()
+    with col_theme:
+        st.markdown('<div class="theme-toggle-col">', unsafe_allow_html=True)
+        icon = "☀️" if st.session_state.theme == "dark" else "🌙"
+        if st.button(icon, key="theme_toggle", help="Design wechseln"):
+            st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     st.markdown(f"<hr style='border:none;border-top:1px solid {T['divider']};margin:0.5rem 0 1.5rem 0;'>",
                 unsafe_allow_html=True)
 
@@ -678,25 +776,75 @@ def view_app():
 
                 if role == "seller" and s_vals:
                     st.markdown("### Einflussfaktoren auf den Preis")
-                    fig = plt.figure(figsize=(10, 6))
-                    shap.plots.waterfall(s_vals[0], show=False)
-                    plt.subplots_adjust(left=0.35, right=0.9)
-                    st.pyplot(fig)
+                    _render_shap_display(s_vals, csym)
 
                 if role == "buyer" and not db_data.empty:
                     st.markdown("### Passende Angebote")
-                    matches = db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)].head(10)
+                    matches = db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)]
                     if not matches.empty:
-                        st.dataframe(matches[["title", "price", "mileage", "url"]], use_container_width=True, hide_index=True)
-                        coords = [{"lat": lt, "lon": ln} for lt, ln in [get_coords(l) for l in matches['location']] if lt]
-                        if coords:
-                            st.map(pd.DataFrame(coords))
+                        # Sort options
+                        sort_col, sort_asc = st.columns([2, 2])
+                        with sort_col:
+                            sort_option = st.selectbox("Sortieren nach", [
+                                "Preis aufsteigend", "Preis absteigend",
+                                "Kilometerstand aufsteigend", "Kilometerstand absteigend"
+                            ], key="sort_matches")
+                        sort_map = {
+                            "Preis aufsteigend": ("price", True),
+                            "Preis absteigend": ("price", False),
+                            "Kilometerstand aufsteigend": ("mileage", True),
+                            "Kilometerstand absteigend": ("mileage", False),
+                        }
+                        s_col, s_asc = sort_map[sort_option]
+                        if s_col in matches.columns:
+                            matches = matches.sort_values(s_col, ascending=s_asc, na_position="last")
+
+                        # Show count control
+                        show_all = st.session_state.get("show_all_matches", False)
+                        display_matches = matches if show_all else matches.head(20)
+
+                        # Build display dataframe
+                        if market == "DE":
+                            # DE: show URL as clickable link
+                            disp = display_matches[[c for c in ["title", "price", "mileage"] if c in display_matches.columns]].copy()
+                            if "url" in display_matches.columns:
+                                disp["Link"] = display_matches["url"].apply(
+                                    lambda u: f'<a href="{u}" target="_blank">Zum Inserat</a>' if pd.notna(u) and str(u).startswith("http") else ""
+                                )
+                                st.markdown(disp.to_html(escape=False, index=False), unsafe_allow_html=True)
+                            else:
+                                st.dataframe(disp, use_container_width=True, hide_index=True)
+                        else:
+                            # US: no URL column
+                            disp_cols = [c for c in ["title", "price", "mileage"] if c in display_matches.columns]
+                            st.dataframe(display_matches[disp_cols], use_container_width=True, hide_index=True)
+
+                        # Show all / location buttons
+                        if len(matches) > 20 and not show_all:
+                            if st.button(f"Alle {len(matches)} Angebote anzeigen", key="btn_show_all_matches"):
+                                st.session_state.show_all_matches = True
+                                st.rerun()
+                        elif show_all and len(matches) > 20:
+                            st.caption(f"{len(matches)} Angebote angezeigt.")
+
+                        if "location" in matches.columns:
+                            coords = [{"lat": lt, "lon": ln} for lt, ln in [get_coords(l) for l in display_matches['location'].head(20)] if lt]
+                            if coords:
+                                st.map(pd.DataFrame(coords))
+                    else:
+                        st.caption("Keine passenden Angebote für diese Konfiguration gefunden.")
 
                 st.markdown("### Empfehlungen")
                 recs = generate_recommendations(trained_models, market, input_vals, price, db_data, csym, role)
                 if recs:
-                    for r in recs:
+                    show_all_recs = st.session_state.get("show_all_recs", False)
+                    show_count = len(recs) if show_all_recs else min(5, len(recs))
+                    for r in recs[:show_count]:
                         st.info(r["text"])
+                    if len(recs) > 5 and not show_all_recs:
+                        if st.button(f"Alle {len(recs)} Empfehlungen anzeigen", key="btn_show_all_recs"):
+                            st.session_state.show_all_recs = True
+                            st.rerun()
                 else:
                     st.caption("Keine relevanten Empfehlungen für diese Konfiguration gefunden.")
 
@@ -705,7 +853,7 @@ def view_app():
         if "GEMINI_API_KEY" in st.secrets:
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
             chat_m = genai.GenerativeModel(
-                "gemini-1.5-flash",
+                "gemini-2.0-flash",
                 system_instruction=f"Du bist der AutoValue-Experte für den {market}-Markt. Antworte professionell und präzise auf Deutsch.",
             )
             for m in st.session_state.chat_history:
@@ -715,12 +863,17 @@ def view_app():
                 with st.chat_message("user"):
                     st.markdown(p)
                 st.session_state.chat_history.append({"role": "user", "content": p})
-                resp = chat_m.start_chat(
-                    history=[{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in st.session_state.chat_history[:-1]]
-                ).send_message(p)
-                with st.chat_message("assistant"):
-                    st.markdown(resp.text)
-                st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
+                try:
+                    history = [{"role": "user" if m["role"] == "user" else "model",
+                                "parts": [m["content"]]}
+                               for m in st.session_state.chat_history]
+                    resp = chat_m.generate_content(history)
+                    with st.chat_message("assistant"):
+                        st.markdown(resp.text)
+                    st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
+                except Exception as e:
+                    with st.chat_message("assistant"):
+                        st.error(f"Chat-Fehler: {e}")
         else:
             st.info("Der Chat-Assistent benötigt einen Gemini API-Key. Fügen Sie GEMINI_API_KEY zu Ihren Streamlit Secrets hinzu.")
 
@@ -810,24 +963,53 @@ def _render_us_form_fields(enc_cats, db_data, brand, model_name, role, show_adva
 
     if show_advanced:
         st.markdown("#### Erweiterte Optionen")
-        _render_us_advanced(enc_cats)
+        _render_us_advanced(enc_cats, db_data, model_name)
 
 
-def _render_us_advanced(enc_cats):
-    """US erweiterte Klassifizierungsfelder."""
+def _render_us_advanced(enc_cats, db_data=None, model_name=None):
+    """US erweiterte Klassifizierungsfelder — gefiltert nach Modell."""
+    # Filter options by selected model from db_data
+    model_data = pd.DataFrame()
+    if db_data is not None and not db_data.empty and model_name:
+        model_data = db_data[db_data['model'] == model_name]
+
     f1, f2, f3 = st.columns(3)
     with f1:
-        trim_opts = enc_cats.get("trim", ["unknown"])
+        if not model_data.empty and 'trim' in model_data.columns:
+            trim_opts = sorted(model_data['trim'].dropna().astype(str).unique())
+            trim_opts = [t for t in trim_opts if t and t != 'nan']
+        else:
+            trim_opts = enc_cats.get("trim", ["unknown"])
+        if not trim_opts:
+            trim_opts = ["unknown"]
         st.selectbox("Ausstattungslinie", trim_opts, key="us_trim_adv", format_func=_fmt)
     with f2:
-        eng_opts = enc_cats.get("engine", ["unknown"])
+        if not model_data.empty and 'engine' in model_data.columns:
+            eng_opts = sorted(model_data['engine'].dropna().astype(str).unique())
+            eng_opts = [e for e in eng_opts if e and e != 'nan']
+        else:
+            eng_opts = enc_cats.get("engine", ["unknown"])
+        if not eng_opts:
+            eng_opts = ["unknown"]
         st.selectbox("Motor", eng_opts, key="us_engine", format_func=_fmt)
     with f3:
-        ext_opts = enc_cats.get("exterior_color", ["unknown"])
-        st.selectbox("Aussenfarbe", ext_opts, key="us_ext_color", format_func=_fmt)
+        if not model_data.empty and 'exterior_color' in model_data.columns:
+            ext_opts = sorted(model_data['exterior_color'].dropna().astype(str).unique())
+            ext_opts = [e for e in ext_opts if e and e != 'nan']
+        else:
+            ext_opts = enc_cats.get("exterior_color", ["unknown"])
+        if not ext_opts:
+            ext_opts = ["unknown"]
+        st.selectbox("Au\u00dfenfarbe", ext_opts, key="us_ext_color", format_func=_fmt)
     f4, f5 = st.columns(2)
     with f4:
-        int_opts = enc_cats.get("interior_color", ["unknown"])
+        if not model_data.empty and 'interior_color' in model_data.columns:
+            int_opts = sorted(model_data['interior_color'].dropna().astype(str).unique())
+            int_opts = [i for i in int_opts if i and i != 'nan']
+        else:
+            int_opts = enc_cats.get("interior_color", ["unknown"])
+        if not int_opts:
+            int_opts = ["unknown"]
         st.selectbox("Innenfarbe", int_opts, key="us_int_color", format_func=_fmt)
     with f5:
         pass
