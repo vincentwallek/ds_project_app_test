@@ -786,7 +786,7 @@ def view_header():
             
         if os.path.exists(logo_path):
             st.markdown(
-                f'<div style="display: flex; justify-content: center; margin-top: -5rem; margin-bottom: -1.5rem;">'
+                f'<div style="display: flex; justify-content: center; margin-top: -6rem; margin-bottom: 2rem;">'
                 f'<img src="data:image/png;base64,{img_to_base64(logo_path)}" width="300" />'
                 f'</div>',
                 unsafe_allow_html=True,
