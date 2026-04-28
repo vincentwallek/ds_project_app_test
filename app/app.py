@@ -7,61 +7,71 @@ import matplotlib.pyplot as plt
 from supabase import create_client
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
+import google.generativeai as genai
 import os
 
 # ==========================================
 # 1. PAGE CONFIGURATION & STYLING
 # ==========================================
 st.set_page_config(
-    page_title="Vehicle Valuation Intelligence",
+    page_title="VVI | Vehicle Valuation Intelligence",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# Minimalistisches, professionelles CSS-Styling (versteckt Streamlit-Brandings)
 st.markdown("""
     <style>
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
-        .block-container {padding-top: 2rem; padding-bottom: 2rem;}
-        h1, h2, h3 {font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #1f2937;}
-        .stButton>button {width: 100%; background-color: #0f172a; color: white; border-radius: 4px;}
+        .block-container {padding-top: 2rem; padding-bottom: 2rem; max-width: 1200px;}
+        h1, h2, h3 {font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #111827; font-weight: 600;}
+        .stButton>button {width: 100%; background-color: #0f172a; color: white; border-radius: 6px; padding: 0.6rem; border: none; font-weight: 500;}
         .stButton>button:hover {background-color: #334155; color: white;}
+        .card {background-color: #ffffff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); border: 1px solid #e5e7eb; margin-bottom: 1rem;}
+        .logo-text {font-size: 24px; font-weight: 700; color: #0f172a; letter-spacing: -0.5px;}
     </style>
 """, unsafe_allow_html=True)
 
+# ==========================================
+# 2. STATE MANAGEMENT & ROUTING
+# ==========================================
+if 'page' not in st.session_state: st.session_state.page = 'home'
+if 'role' not in st.session_state: st.session_state.role = None
+if 'market' not in st.session_state: st.session_state.market = None
+if 'chat_history' not in st.session_state: st.session_state.chat_history = []
+
+
+def navigate(page, role=None, market=None):
+    st.session_state.page = page
+    if role: st.session_state.role = role
+    if market: st.session_state.market = market
+    st.rerun()
+
 
 # ==========================================
-# 2. INITIALIZATION & DATA LOADING
+# 3. INITIALIZATION & HELPERS
 # ==========================================
 @st.cache_resource
 def init_supabase():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 
 supabase = init_supabase()
-geolocator = Nominatim(user_agent="vehicle_valuation_app")
+geolocator = Nominatim(user_agent="vvi_app_v2")
 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
 
 @st.cache_resource
 def load_models():
     models = {}
-    # Den genauen Pfad zu dem Ordner ermitteln, in dem die app.py liegt
     base_dir = os.path.dirname(os.path.abspath(__file__))
-
     try:
-        # DE Models
         with open(os.path.join(base_dir, "car_price_xgboost.pkl"), "rb") as f:
             models["de_model"] = pickle.load(f)
         with open(os.path.join(base_dir, "categorical_encoder.pkl"), "rb") as f:
             models["de_encoder"] = pickle.load(f)
         with open(os.path.join(base_dir, "numeric_columns.pkl"), "rb") as f:
             models["de_num_cols"] = pickle.load(f)
-
-        # US Models
         with open(os.path.join(base_dir, "car_price_xgboost_us.pkl"), "rb") as f:
             models["us_model"] = pickle.load(f)
         with open(os.path.join(base_dir, "categorical_encoder_us.pkl"), "rb") as f:
@@ -70,7 +80,7 @@ def load_models():
             models["us_num_cols"] = pickle.load(f)
         return models
     except Exception as e:
-        st.error(f"System Error: Model initialization failed. Details: {e}")
+        st.error(f"System Error: Model path failed. Details: {e}")
         st.stop()
 
 
@@ -78,54 +88,50 @@ models = load_models()
 
 
 @st.cache_data
+def get_unique_vehicles(market_code):
+    """Holt Marken, Modelle und Titel live aus Supabase"""
+    try:
+        res = supabase.table("listings").select("brand, model, title").eq("market", market_code).execute()
+        df = pd.DataFrame(res.data)
+        hierarchy = {}
+        for b in df['brand'].unique():
+            models_for_brand = df[df['brand'] == b]['model'].unique().tolist()
+            hierarchy[b.lower()] = [m.lower() for m in models_for_brand]
+        return hierarchy, df
+    except:
+        return {}, pd.DataFrame()
+
+
+@st.cache_data
 def get_coordinates(location_string):
-    """Konvertiert String-Adressen in Koordinaten für die Karte"""
-    if not location_string or location_string == "unbekannt":
-        return None, None
+    if not location_string or location_string == "unbekannt": return None, None
     try:
         loc = geocode(location_string)
-        if loc:
-            return loc.latitude, loc.longitude
+        if loc: return loc.latitude, loc.longitude
     except:
         pass
     return None, None
 
 
-# ==========================================
-# 3. HELPER FUNCTIONS FOR PREDICTION
-# ==========================================
 def predict_price(market, input_data):
     if market == "DE":
-        model = models["de_model"]
-        encoder = models["de_encoder"]
-        num_cols = models["de_num_cols"]
+        model, encoder, num_cols = models["de_model"], models["de_encoder"], models["de_num_cols"]
         cat_cols = ["brand", "model", "transmission", "fuel"]
     else:
-        model = models["us_model"]
-        encoder = models["us_encoder"]
-        num_cols = models["us_num_cols"]
+        model, encoder, num_cols = models["us_model"], models["us_encoder"], models["us_num_cols"]
         cat_cols = ["brand", "model", "trim", "drivetrain", "fuel", "transmission", "body_style", "engine",
                     "exterior_color", "interior_color", "usage_type"]
 
     df_input = pd.DataFrame([input_data])
-
-    # Sicherstellen, dass alle Features vorhanden sind (mit 0 füllen, falls nicht)
     for col in num_cols:
-        if col not in df_input.columns:
-            df_input[col] = 0.0
+        if col not in df_input.columns: df_input[col] = 0.0
 
-    # Kategoriale Daten encodieren
     encoded_cats = encoder.transform(df_input[cat_cols])
     encoded_cols = encoder.get_feature_names_out(cat_cols)
     df_encoded = pd.DataFrame(encoded_cats, columns=encoded_cols, index=df_input.index)
-
-    # Zusammenfügen
     X_final = pd.concat([df_input[num_cols], df_encoded], axis=1)
 
-    # Vorhersage
     prediction = model.predict(X_final)[0]
-
-    # SHAP Erklärung berechnen
     explainer = shap.TreeExplainer(model)
     shap_values = explainer(X_final)
 
@@ -133,150 +139,156 @@ def predict_price(market, input_data):
 
 
 # ==========================================
-# 4. UI LAYOUT
+# 4. UI VIEWS
 # ==========================================
-st.title("Vehicle Valuation Intelligence")
-st.markdown("Professional market analysis and price prediction powered by Machine Learning.")
+def view_header():
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        st.markdown('<div class="logo-text">VVI</div>', unsafe_allow_html=True)
+    with col2:
+        if st.session_state.page != 'home':
+            st.button("Back to Dashboard", on_click=navigate, args=('home',))
+    st.divider()
 
-# Sidebar: Market Selection
-st.sidebar.header("Market Selection")
-market = st.sidebar.radio("Select Target Market:", ["Germany (DE)", "United States (US)"])
-market_code = "DE" if "Germany" in market else "US"
-currency = "€" if market_code == "DE" else "$"
 
-tab_seller, tab_buyer = st.tabs(["Seller Intelligence (Valuation)", "Buyer Intelligence (Market Search)"])
+def view_home():
+    st.markdown("<h1 style='text-align: center; margin-bottom: 2rem;'>Intelligence Dashboard</h1>",
+                unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.h3("Seller Intelligence")
+        st.markdown("Asset valuation and feature impact analysis for professionals.")
+        if st.button("Evaluate Vehicle (DE)"): navigate('app', 'seller', 'DE')
+        if st.button("Evaluate Vehicle (US)"): navigate('app', 'seller', 'US')
+        st.markdown('</div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.h3("Buyer Intelligence")
+        st.markdown("Market search, fair-price estimation and inventory tracking.")
+        if st.button("Search Inventory (DE)"): navigate('app', 'buyer', 'DE')
+        if st.button("Search Inventory (US)"): navigate('app', 'buyer', 'US')
+        st.markdown('</div>', unsafe_allow_html=True)
 
-# ------------------------------------------
-# TAB 1: SELLER (Valuation & SHAP)
-# ------------------------------------------
-with tab_seller:
-    st.subheader("Asset Valuation")
-    st.markdown(
-        "Input vehicle specifications to receive an AI-driven market value estimation and feature impact analysis.")
 
-    with st.form("valuation_form"):
+def render_vehicle_form(role):
+    market = st.session_state.market
+    currency = "€" if market == "DE" else "$"
+
+    # Live Daten laden
+    hierarchy, raw_db_data = get_unique_vehicles(market)
+
+    with st.form(f"{role}_form"):
         col1, col2, col3 = st.columns(3)
-
         with col1:
-            brand = st.text_input("Brand", value="mercedes-benz" if market_code == "DE" else "ford")
-            model_name = st.text_input("Model", value="c-klasse" if market_code == "DE" else "f-150")
-            car_age = st.number_input("Vehicle Age (Years)", min_value=0, max_value=50, value=5)
+            brand_options = list(hierarchy.keys())
+            brand = st.selectbox("Brand", options=brand_options if brand_options else ["mercedes-benz"])
 
+            model_options = hierarchy.get(brand, [])
+            model_name = st.selectbox("Model", options=model_options if model_options else ["c-klasse"])
+
+            # Spezifische Version (Title) Auswahl
+            variant_options = \
+            raw_db_data[(raw_db_data['brand'].str.lower() == brand) & (raw_db_data['model'].str.lower() == model_name)][
+                'title'].unique().tolist()
+            selected_variant = st.selectbox("Specific Version",
+                                            options=variant_options if variant_options else ["Standard"])
+
+            car_age = st.number_input("Age (Years)", min_value=0, max_value=30, value=3)
         with col2:
-            mileage = st.number_input("Mileage", min_value=0, value=50000)
-            transmission = st.selectbox("Transmission", ["automatic", "manual", "unbekannt"])
-            fuel = st.selectbox("Fuel Type", ["benzin", "diesel", "elektro", "hybrid", "unbekannt", "gas"])
-
+            mileage = st.number_input("Mileage", min_value=0, value=50000, step=5000)
+            transmission = st.selectbox("Transmission", ["automatic", "manual"])
+            fuel = st.selectbox("Fuel Type", ["benzin", "diesel", "elektro", "hybrid"])
         with col3:
-            if market_code == "DE":
+            if market == "DE":
                 power_ps = st.number_input("Power (PS)", min_value=0, value=150)
-                owners = st.number_input("Previous Owners", min_value=1, value=1)
-                st.markdown("**Key Features**")
                 has_pano = st.checkbox("Panoramic Roof")
                 has_amg = st.checkbox("AMG Line")
             else:
-                cylinders = st.number_input("Cylinders", min_value=0, value=6)
+                cylinders = st.selectbox("Cylinders", [4, 6, 8])
                 has_accidents = st.checkbox("Accident History")
-                is_cpo = st.checkbox("Certified Pre-Owned (CPO)")
+                is_cpo = st.checkbox("Certified (CPO)")
 
-        submit_valuation = st.form_submit_button("Calculate Market Value")
+        submit_btn = st.form_submit_button("Start Analysis")
 
-    if submit_valuation:
-        with st.spinner("Analyzing market data..."):
-            input_data = {
-                "brand": brand.lower().strip(),
-                "model": model_name.lower().strip(),
-                "car_age": float(car_age),
-                "mileage": float(mileage),
-                "transmission": transmission.lower(),
-                "fuel": fuel.lower()
-            }
-
-            if market_code == "DE":
-                input_data.update({
-                    "power_ps": float(power_ps),
-                    "owners": float(owners),
-                    "ausstattung_pano": 1.0 if has_pano else 0.0,
-                    "ausstattung_amg_line": 1.0 if has_amg else 0.0
-                })
+    if submit_btn:
+        with st.spinner("Analyzing market drivers..."):
+            input_data = {"brand": brand, "model": model_name, "car_age": float(car_age), "mileage": float(mileage),
+                          "transmission": transmission, "fuel": fuel}
+            if market == "DE":
+                input_data.update(
+                    {"power_ps": float(power_ps), "owners": 1.0, "ausstattung_pano": 1.0 if has_pano else 0.0,
+                     "ausstattung_amg_line": 1.0 if has_amg else 0.0})
             else:
-                input_data.update({
-                    "cylinders": float(cylinders),
-                    "has_accidents": 1.0 if has_accidents else 0.0,
-                    "is_cpo": 1.0 if is_cpo else 0.0,
-                    "doors": 4.0, "seats": 5.0,  # Defaults
-                    "trim": "unbekannt", "drivetrain": "unbekannt", "body_style": "unbekannt",
-                    "engine": "unbekannt", "exterior_color": "unbekannt", "interior_color": "unbekannt",
-                    "usage_type": "unbekannt"
-                })
+                # Defaults für US falls nicht im Formular
+                input_data.update({"cylinders": float(cylinders), "has_accidents": 1.0 if has_accidents else 0.0,
+                                   "is_cpo": 1.0 if is_cpo else 0.0, "doors": 4.0, "seats": 5.0, "trim": "unbekannt",
+                                   "drivetrain": "unbekannt", "body_style": "unbekannt", "engine": "unbekannt",
+                                   "exterior_color": "unbekannt", "interior_color": "unbekannt",
+                                   "usage_type": "unbekannt"})
 
-            predicted_price, shap_vals = predict_price(market_code, input_data)
-
+            predicted_price, shap_vals = predict_price(market, input_data)
             st.divider()
-            st.metric(label="Estimated Market Value", value=f"{predicted_price:,.2f} {currency}")
+            st.metric(label=f"Estimated Market Value ({selected_variant})", value=f"{predicted_price:,.2f} {currency}")
 
-            st.markdown("### Feature Impact Analysis")
-            st.markdown("Understanding the key drivers behind this valuation:")
+            if role == "seller":
+                st.markdown("### Feature Impact Analysis")
+                fig = plt.figure(figsize=(10, 6))
+                shap.plots.waterfall(shap_vals[0], show=False)
+                plt.subplots_adjust(left=0.35, right=0.9, top=0.9)
+                st.pyplot(fig, clear_figure=True)
 
-            # Professionelles Matplotlib SHAP Chart
-            fig, ax = plt.subplots(figsize=(10, 6))
-            shap.plots.waterfall(shap_vals[0], show=False)
-            plt.gcf().set_size_inches(8, 5)
-            plt.tight_layout()
-            st.pyplot(fig)
+            if role == "buyer":
+                st.markdown("### Matching Inventory")
+                query = supabase.table("listings").select("brand, model, price, mileage, location, url").eq("market",
+                                                                                                            market).eq(
+                    "brand", brand).eq("model", model_name)
+                res = query.lte("price", predicted_price * 1.2).limit(15).execute()
+                df_results = pd.DataFrame(res.data)
 
-# ------------------------------------------
-# TAB 2: BUYER (Search & Map)
-# ------------------------------------------
-with tab_buyer:
-    st.subheader("Market Inventory Search")
-    st.markdown("Discover available listings matching your criteria and visualize their locations.")
+                if not df_results.empty:
+                    st.dataframe(df_results, column_config={
+                        "price": st.column_config.NumberColumn("Price", format="%d " + currency),
+                        "url": st.column_config.LinkColumn("Listing", display_text="Open Link")},
+                                 use_container_width=True, hide_index=True)
+                    lats = [{"lat": lat, "lon": lon} for lat, lon in
+                            [get_coordinates(loc) for loc in df_results["location"]] if lat]
+                    if lats: st.map(pd.DataFrame(lats))
 
-    with st.form("search_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            search_brand = st.text_input("Target Brand", value="bmw")
-            search_model = st.text_input("Target Model", value="")
-        with col2:
-            max_price = st.number_input("Maximum Price", min_value=0, value=50000, step=1000)
-            max_mileage = st.number_input("Maximum Mileage", min_value=0, value=100000, step=5000)
 
-        submit_search = st.form_submit_button("Search Market")
+def view_app():
+    title = "Seller Intelligence" if st.session_state.role == "seller" else "Buyer Intelligence"
+    st.subheader(f"{title} | {st.session_state.market} Market")
+    t1, t2 = st.tabs(["Analysis Engine", "VVI Chat Assistant"])
 
-    if submit_search:
-        with st.spinner("Querying database & resolving geographic data..."):
-            # Datenbankabfrage via Supabase
-            query = supabase.table("listings").select("id, brand, model, price, mileage, location").eq("market",
-                                                                                                       market_code).ilike(
-                "brand", f"%{search_brand}%")
-            if search_model:
-                query = query.ilike("model", f"%{search_model}%")
+    with t1:
+        render_vehicle_form(st.session_state.role)
 
-            # API Limitierung zum Schutz der Performance
-            res = query.lte("price", max_price).lte("mileage", max_mileage).limit(50).execute()
+    with t2:
+        if "GEMINI_API_KEY" in st.secrets:
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            model = genai.GenerativeModel('gemini-1.5-flash',
+                                          system_instruction=f"You are a professional automotive market expert for {st.session_state.market}. Tone: Serious, professional, no emojis.")
 
-            df_results = pd.DataFrame(res.data)
+            for m in st.session_state.chat_history:
+                with st.chat_message(m["role"]): st.markdown(m["content"])
 
-            if df_results.empty:
-                st.warning("No listings found matching your criteria.")
-            else:
-                st.success(f"Found {len(df_results)} matching listings.")
+            if p := st.chat_input("Ask about market trends..."):
+                with st.chat_message("user"): st.markdown(p)
+                st.session_state.chat_history.append({"role": "user", "content": p})
 
-                # Karte generieren
-                locations_for_map = []
-                for _, row in df_results.iterrows():
-                    lat, lon = get_coordinates(row.get("location"))
-                    if lat and lon:
-                        locations_for_map.append({"lat": lat, "lon": lon})
+                with st.spinner("VVI is analyzing..."):
+                    h = [{"role": "user" if msg["role"] == "user" else "model", "parts": [msg["content"]]} for msg in
+                         st.session_state.chat_history[:-1]]
+                    resp = model.start_chat(history=h).send_message(p)
+                    with st.chat_message("assistant"): st.markdown(resp.text)
+                    st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
+        else:
+            st.error("Chat Assistant unavailable: GEMINI_API_KEY missing.")
 
-                if locations_for_map:
-                    df_map = pd.DataFrame(locations_for_map)
-                    st.map(df_map)
-                else:
-                    st.info("Location data not resolved for the map view. Ensure valid ZIP codes/Cities are present.")
 
-                # Daten-Tabelle anzeigen (aufgeräumt)
-                st.dataframe(
-                    df_results[["brand", "model", "price", "mileage", "location"]].style.format({"price": "{:,.2f}"}),
-                    use_container_width=True
-                )
+view_header()
+if st.session_state.page == 'home':
+    view_home()
+else:
+    view_app()
