@@ -12,7 +12,7 @@ import os
 import base64
 
 # ==========================================
-# 1. PAGE CONFIGURATION & DYNAMIC THEME
+# 1. PAGE CONFIGURATION & NATIVE THEME
 # ==========================================
 st.set_page_config(
     page_title="AutoValue | Vehicle Intelligence",
@@ -20,45 +20,21 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Dynamisches CSS: Reagiert auf System-/Browser-Einstellungen
+# Wir nutzen native Streamlit CSS-Variablen, damit Light/Dark Mode wieder fehlerfrei klappt!
 st.markdown("""
     <style>
-        /* Verstecke Streamlit Standard-Elemente */
         footer {visibility: hidden;}
         #MainMenu {visibility: hidden;}
 
-        /* Dynamischer Hintergrund je nach System-Theme */
-        @media (prefers-color-scheme: light) {
-            .stApp { background-color: #ffffff !important; }
-        }
-        @media (prefers-color-scheme: dark) {
-            /* Passt sich an dunkle Logos an (Tiefes Navy/Schwarz) */
-            .stApp { background-color: #0b1120 !important; }
-        }
-
-        /* Modernes Card-Layout, das in beiden Themes funktioniert */
+        /* Modernes Card-Layout passt sich an Light/Dark Mode an */
         .card { 
             padding: 2rem; 
             border-radius: 12px; 
-            border: 1px solid rgba(128, 128, 128, 0.2);
-            background-color: rgba(128, 128, 128, 0.05);
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); 
+            border: 1px solid var(--secondary-background-color);
+            background-color: var(--secondary-background-color);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); 
             margin-bottom: 1.5rem;
             min-height: 220px;
-        }
-
-        /* Einheitliche Buttons, die die native Theme-Schriftfarbe übernehmen */
-        .stButton>button { 
-            width: 100%; 
-            border-radius: 8px; 
-            border: 1px solid rgba(128,128,128,0.3) !important;
-            font-weight: 600;
-            padding: 0.6rem;
-            background-color: rgba(128, 128, 128, 0.1);
-            transition: all 0.2s ease;
-        }
-        .stButton>button:hover {
-            background-color: rgba(128, 128, 128, 0.2);
         }
 
         /* Transparenter Header */
@@ -90,7 +66,7 @@ def init_supabase():
 
 
 supabase = init_supabase()
-geolocator = Nominatim(user_agent="autovalue_v7")
+geolocator = Nominatim(user_agent="autovalue_v8")
 geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
 
@@ -130,7 +106,7 @@ def get_market_data(market_code):
             if 'brand' in df.columns: df['brand'] = df['brand'].astype(str).str.strip().str.title()
             if 'model' in df.columns: df['model'] = df['model'].astype(str).str.strip().str.upper()
         return df
-    except Exception as e:
+    except Exception:
         return pd.DataFrame()
 
 
@@ -174,7 +150,6 @@ def predict_price(market, input_data):
 
 
 def get_base64_image(image_path):
-    """Liest ein Bild ein und konvertiert es für die HTML-Integration"""
     try:
         with open(image_path, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode()
@@ -189,8 +164,6 @@ def view_header():
     col1, col2, col3 = st.columns([1, 3, 1])
     with col1:
         base_path = os.path.dirname(os.path.abspath(__file__))
-
-        # Base64 Kodierung für dynamischen Theme-Wechsel
         light_b64 = get_base64_image(os.path.join(base_path, "light_logo.png"))
         dark_b64 = get_base64_image(os.path.join(base_path, "dark_logo.png"))
 
@@ -211,8 +184,6 @@ def view_header():
             <img src="data:image/png;base64,{dark_b64}" class="logo-img logo-dark">
             """
             st.markdown(html_code, unsafe_allow_html=True)
-        elif light_b64:
-            st.image(os.path.join(base_path, "light_logo.png"), use_container_width=True)
         else:
             st.subheader("AutoValue.")
 
@@ -271,16 +242,28 @@ def view_app():
         with st.form("valuation_form"):
             c1, c2, c3 = st.columns(3)
             with c1:
-                brands = sorted(db_data['brand'].dropna().unique()) if not db_data.empty else ["Mercedes-Benz"]
+                # KRITISCHER FIX: Sicherstellen, dass die Spalten existieren!
+                if not db_data.empty and 'brand' in db_data.columns:
+                    brands = sorted(db_data['brand'].dropna().unique())
+                else:
+                    brands = ["Mercedes-Benz", "Ford"]
                 brand = st.selectbox("Marke", brands)
 
-                models = sorted(
-                    db_data[db_data['brand'] == brand]['model'].dropna().unique()) if not db_data.empty else [
-                    "C-KLASSE"]
+                if not db_data.empty and 'model' in db_data.columns:
+                    models = sorted(db_data[db_data['brand'] == brand]['model'].dropna().unique())
+                else:
+                    models = ["C-KLASSE", "F-150"]
+                if not models: models = ["Standard"]
                 model_name = st.selectbox("Modell", models)
 
-                variants = sorted(db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)][
-                                      'title'].dropna().unique()) if not db_data.empty else ["Standard"]
+                # FIX für den KeyError: 'title'
+                if not db_data.empty and 'title' in db_data.columns:
+                    variants = sorted(db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)][
+                                          'title'].dropna().unique())
+                else:
+                    variants = []
+                if not variants: variants = ["Standard"]
+
                 variant = st.selectbox("Motorisierung / Version", variants)
 
                 age = st.number_input("Alter (Jahre)", 0, 30, 3)
@@ -305,30 +288,34 @@ def view_app():
         if submitted:
             with st.spinner("Berechne Marktwert..."):
                 if market == "DE":
-                    if not db_data.empty and 'power_ps' in db_data.columns and variant in db_data['title'].values:
-                        power = db_data[db_data['title'] == variant]['power_ps'].mode()[0]
-                    else:
-                        power = 150
+                    # Extraktion absichern
+                    power = 150
+                    if not db_data.empty and 'title' in db_data.columns and 'power_ps' in db_data.columns:
+                        if variant in db_data['title'].values:
+                            p_mode = db_data[db_data['title'] == variant]['power_ps'].mode()
+                            if not p_mode.empty: power = p_mode[0]
 
                     input_vals = {"brand": brand, "model": model_name, "car_age": float(age), "mileage": float(mileage),
                                   "transmission": trans, "fuel": fuel, "power_ps": float(power), "owners": 1.0,
                                   "ausstattung_pano": 1.0 if opt1 else 0.0,
                                   "ausstattung_amg_line": 1.0 if opt2 else 0.0}
                 else:
-                    if not db_data.empty and variant in db_data['title'].values:
-                        cyl = db_data[db_data['title'] == variant]['cylinders'].mode()[
-                            0] if 'cylinders' in db_data.columns else 6
-                        eng = db_data[db_data['title'] == variant]['engine'].mode()[
-                            0] if 'engine' in db_data.columns else "unbekannt"
-                    else:
-                        cyl, eng = 6, "unbekannt"
+                    cyl, eng = 6, "unbekannt"
+                    if not db_data.empty and 'title' in db_data.columns:
+                        if variant in db_data['title'].values:
+                            if 'cylinders' in db_data.columns:
+                                c_mode = db_data[db_data['title'] == variant]['cylinders'].mode()
+                                if not c_mode.empty: cyl = c_mode[0]
+                            if 'engine' in db_data.columns:
+                                e_mode = db_data[db_data['title'] == variant]['engine'].mode()
+                                if not e_mode.empty: eng = e_mode[0]
 
                     input_vals = {"brand": brand, "model": model_name, "car_age": float(age), "mileage": float(mileage),
                                   "transmission": trans, "fuel": fuel, "cylinders": float(cyl), "engine": eng,
                                   "has_accidents": 1.0 if opt1 else 0.0, "is_cpo": 1.0 if opt2 else 0.0, "doors": 4.0,
                                   "seats": 5.0, "trim": "unbekannt", "drivetrain": "unbekannt",
-                                  "body_style": "unbekannt",
-                                  "exterior_color": "unbekannt", "interior_color": "unbekannt",
+                                  "body_style": "unbekannt", "exterior_color": "unbekannt",
+                                  "interior_color": "unbekannt",
                                   "usage_type": "unbekannt"}
 
                 price, s_vals = predict_price(market, input_vals)
@@ -337,25 +324,34 @@ def view_app():
 
                 if role == "seller" and s_vals is not None:
                     st.markdown("### Einflussfaktoren auf den Preis")
-                    # Weißer Hintergrund (als "Karte"), damit SHAP Diagramm auch in Dark Mode lesbar bleibt
                     fig = plt.figure(figsize=(10, 6))
-                    fig.patch.set_facecolor('white')
+                    fig.patch.set_facecolor('none')
                     ax = fig.add_subplot(111)
-                    ax.set_facecolor('white')
+                    ax.set_facecolor('none')
+                    # Helle Schriftarten für Dark Mode Support bei SHAP
+                    ax.tick_params(colors='gray')
                     shap.plots.waterfall(s_vals[0], show=False)
                     plt.subplots_adjust(left=0.35, right=0.9)
                     st.pyplot(fig)
 
                 if role == "buyer" and not db_data.empty:
                     st.markdown("### Passende Angebote im Inventar")
-                    matches = db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name) & (
-                                db_data['title'] == variant)].head(10)
+
+                    # Safe Filter
+                    if 'title' in db_data.columns:
+                        matches = db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name) & (
+                                    db_data['title'] == variant)].head(10)
+                    else:
+                        matches = db_data[(db_data['brand'] == brand) & (db_data['model'] == model_name)].head(10)
 
                     if not matches.empty:
                         url_col = "carfax_url" if market == "US" and "carfax_url" in matches.columns else "url"
                         if url_col not in matches.columns: matches[url_col] = "Kein Link verfügbar"
 
-                        st.dataframe(matches[["title", "price", "mileage", url_col]],
+                        cols_to_show = ["price", "mileage", url_col]
+                        if 'title' in matches.columns: cols_to_show.insert(0, "title")
+
+                        st.dataframe(matches[cols_to_show],
                                      column_config={
                                          "price": st.column_config.NumberColumn("Preis", format="%d " + currency),
                                          url_col: st.column_config.LinkColumn("Inserat öffnen")
@@ -366,13 +362,13 @@ def view_app():
                                   lt]
                         if coords: st.map(pd.DataFrame(coords))
                     else:
-                        st.info("Aktuell keine exakten Treffer für diese Motorisierung im Inventar.")
+                        st.info("Aktuell keine exakten Treffer für dieses Modell im Inventar.")
 
     with tab_chat:
         if "GEMINI_API_KEY" in st.secrets:
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
             chat_m = genai.GenerativeModel('gemini-1.5-flash',
-                                           system_instruction=f"Du bist der AutoValue Experte für den {market} Automarkt. Antworte seriös und professionell.")
+                                           system_instruction=f"Du bist der AutoValue Experte für den {market} Automarkt.")
 
             for m in st.session_state.chat_history:
                 with st.chat_message(m["role"]): st.markdown(m["content"])
