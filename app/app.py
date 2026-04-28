@@ -6,7 +6,7 @@ import shap
 from supabase import create_client
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
-import google.generativeai as genai
+from groq import Groq
 import os
 from helpers import (
     img_to_base64, get_encoder_categories, generate_recommendations,
@@ -941,32 +941,28 @@ def view_app():
 
     # ── Chat Tab ──
     with tab_chat:
-        if "GEMINI_API_KEY" in st.secrets:
-            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-            chat_m = genai.GenerativeModel(
-                "gemini-2.0-flash",
-                system_instruction=f"Du bist der AutoValue-Experte für den {market}-Markt. Antworte professionell und präzise auf Deutsch.",
-            )
+        if "GROQ_API_KEY" in st.secrets:
+            client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+            sys_prompt = {"role": "system", "content": f"Du bist der AutoValue Experte für den {market} Automarkt. Antworte professionell und auf Deutsch."}
+
             for m in st.session_state.chat_history:
-                with st.chat_message(m["role"]):
-                    st.markdown(m["content"])
-            if p := st.chat_input("Stellen Sie eine Frage ..."):
-                with st.chat_message("user"):
-                    st.markdown(p)
+                with st.chat_message(m["role"]): st.markdown(m["content"])
+
+            if p := st.chat_input("Fragen zum Markt oder Werterhalt?"):
+                with st.chat_message("user"): st.markdown(p)
                 st.session_state.chat_history.append({"role": "user", "content": p})
-                try:
-                    history = [{"role": "user" if m["role"] == "user" else "model",
-                                "parts": [m["content"]]}
-                               for m in st.session_state.chat_history]
-                    resp = chat_m.generate_content(history)
-                    with st.chat_message("assistant"):
-                        st.markdown(resp.text)
-                    st.session_state.chat_history.append({"role": "assistant", "content": resp.text})
-                except Exception as e:
-                    with st.chat_message("assistant"):
-                        st.error(f"Chat-Fehler: {e}")
+
+                with st.spinner("Analysiere..."):
+                    try:
+                        messages = [sys_prompt] + st.session_state.chat_history
+                        resp = client.chat.completions.create(messages=messages, model="llama3-70b-8192").choices[0].message.content
+                        
+                        with st.chat_message("assistant"): st.markdown(resp)
+                        st.session_state.chat_history.append({"role": "assistant", "content": resp})
+                    except Exception as e:
+                        st.error(f"Verbindungsfehler: {e}")
         else:
-            st.info("Der Chat-Assistent benötigt einen Gemini API-Key. Fügen Sie GEMINI_API_KEY zu Ihren Streamlit Secrets hinzu.")
+            st.warning("Chat Assistant nicht konfiguriert (GROQ_API_KEY fehlt in den Secrets).")
 
 
 def _render_de_form_fields(enc_cats, role, show_advanced):
