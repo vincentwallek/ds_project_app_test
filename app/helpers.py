@@ -73,6 +73,11 @@ def predict_price_fast(trained_models, market, input_data):
     for col in num_cols:
         if col not in df.columns:
             df[col] = 0.0
+            
+    for col in cat_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.lower().str.strip()
+            
     enc = encoder.transform(df[cat_cols])
     df_enc = pd.DataFrame(enc, columns=encoder.get_feature_names_out(cat_cols), index=df.index)
     X = pd.concat([df[num_cols], df_enc], axis=1)

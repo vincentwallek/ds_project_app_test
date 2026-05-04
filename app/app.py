@@ -549,6 +549,11 @@ def predict_price(market, input_data):
     for col in num_cols:
         if col not in df_input.columns:
             df_input[col] = 0.0
+            
+    for col in cat_cols:
+        if col in df_input.columns:
+            df_input[col] = df_input[col].astype(str).str.lower().str.strip()
+            
     encoded_cats = encoder.transform(df_input[cat_cols])
     df_encoded = pd.DataFrame(
         encoded_cats,
@@ -1034,6 +1039,32 @@ def view_app():
                     matches["power_ps"] = pd.to_numeric(matches["power_ps"], errors="coerce")
                     matches = matches[matches["power_ps"].fillna(0) >= user_ps]
 
+                if market == "US":
+                    user_fuel = input_vals.get("fuel", "unknown")
+                    if user_fuel != "unknown" and "fuel" in matches.columns:
+                        matches = matches[matches["fuel"].astype(str).str.lower() == str(user_fuel).lower()]
+                    
+                    user_cyl = input_vals.get("cylinders", 0)
+                    if user_cyl > 0 and "cylinders" in matches.columns:
+                        matches = matches[pd.to_numeric(matches["cylinders"], errors="coerce") == user_cyl]
+                        
+                    user_trim = input_vals.get("trim", "unknown")
+                    if user_trim != "unknown" and "trim" in matches.columns:
+                        matches = matches[matches["trim"].astype(str).str.lower() == str(user_trim).lower()]
+                        
+                    user_engine = input_vals.get("engine", "unknown")
+                    if user_engine != "unknown" and "engine" in matches.columns:
+                        matches = matches[matches["engine"].astype(str).str.lower() == str(user_engine).lower()]
+                        
+                elif market == "DE":
+                    user_fuel = input_vals.get("fuel")
+                    if user_fuel and "fuel" in matches.columns:
+                        matches = matches[matches["fuel"].astype(str).str.lower() == str(user_fuel).lower()]
+                    
+                    user_trans = input_vals.get("transmission")
+                    if user_trans and "transmission" in matches.columns:
+                        matches = matches[matches["transmission"].astype(str).str.lower() == str(user_trans).lower()]
+
                 if not matches.empty:
                     # Location filter for map interaction
                     filter_col, sort_col = st.columns([2, 2])
@@ -1359,6 +1390,14 @@ def _render_us_advanced(enc_cats, db_data=None, model_name=None):
     model_data = pd.DataFrame()
     if db_data is not None and not db_data.empty and model_name:
         model_data = db_data[db_data['model'] == model_name]
+        
+        fuel = st.session_state.get("us_fuel")
+        if fuel and "fuel" in model_data.columns:
+            model_data = model_data[model_data["fuel"].astype(str).str.lower() == str(fuel).lower()]
+            
+        cyl = st.session_state.get("us_cyl")
+        if cyl is not None and "cylinders" in model_data.columns:
+            model_data = model_data[pd.to_numeric(model_data["cylinders"], errors="coerce") == cyl]
 
     f1, f2, f3 = st.columns(3)
     with f1:
